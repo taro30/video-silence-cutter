@@ -1,4 +1,5 @@
 import os
+import re
 import subprocess
 import logging
 from pathlib import Path
@@ -7,6 +8,7 @@ from ..models.silence_interval import SilenceInterval
 from ..models.silence_settings import SilenceSettings
 from ..core.silence_parser import SilenceParser
 from ..utils.process_utils import kill_process_group
+from ..utils.time_utils import hms_to_seconds
 
 logger = logging.getLogger(__name__)
 
@@ -63,12 +65,13 @@ class SilenceDetector:
                     # Attempt to parse time from stderr for progress
                     if "time=" in line and progress_callback and video_duration > 0:
                         try:
-                            # e.g., time=00:01:23.45
-                            parts = line.split("time=")[1].split()[0]
-                            from ..utils.time_utils import hms_to_seconds
-                            curr = hms_to_seconds(parts)
-                            pct = min(100.0, (curr / video_duration) * 100.0)
-                            progress_callback(pct, f"無音区間を解析中 ({pct:.1f}%)")
+                            # Parse time=HH:MM:SS.ms or time=HH:MM:SS
+                            match = re.search(r"time=\s*(\d{2}:\d{2}:\d{2}\.\d+|\d{2}:\d{2}:\d{2})", line)
+                            if match:
+                                time_str = match.group(1)
+                                curr_sec = hms_to_seconds(time_str)
+                                pct = min(99.0, (curr_sec / video_duration) * 100.0)
+                                progress_callback(pct, f"無音区間を解析中 ({pct:.1f}%)")
                         except Exception:
                             pass
 

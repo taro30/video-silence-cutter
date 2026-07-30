@@ -243,12 +243,38 @@ class MainWindow(QMainWindow):
         right_layout = QVBoxLayout(right_widget)
         right_layout.setContentsMargins(0, 0, 0, 0)
 
-        lbl_prev_header = QLabel("<b>動画レイアウトプレビュー (1280x720)</b>")
-        right_layout.addWidget(lbl_prev_header)
+        h_prev_top = QHBoxLayout()
+        lbl_prev_header = QLabel("<b>動画レイアウトプレビュー (1280x720) - マウスでタイトルを移動可能</b>")
+        h_prev_top.addWidget(lbl_prev_header)
+        h_prev_top.addStretch()
+
+        self.btn_play_input = QPushButton("▶ 元動画を再生確認")
+        self.btn_play_input.setEnabled(False)
+        self.btn_play_input.clicked.connect(self._play_input_video)
+        h_prev_top.addWidget(self.btn_play_input)
+
+        right_layout.addLayout(h_prev_top)
 
         self.preview_widget = PreviewWidget()
         self.preview_widget.file_dropped_signal.connect(self._load_video_from_path)
+        self.preview_widget.title_position_dragged_signal.connect(self._on_title_dragged)
         right_layout.addWidget(self.preview_widget)
+
+        # Preview Frame Seek Bar
+        h_seek = QHBoxLayout()
+        h_seek.addWidget(QLabel("プレビュー確認フレーム (秒):"))
+        self.spin_preview_sec = QDoubleSpinBox()
+        self.spin_preview_sec.setRange(0.0, 86400.0)
+        self.spin_preview_sec.setValue(1.0)
+        self.spin_preview_sec.setSingleStep(1.0)
+        self.spin_preview_sec.valueChanged.connect(self._on_preview_sec_changed)
+        h_seek.addWidget(self.spin_preview_sec)
+
+        btn_capture_frame = QPushButton("このフレームを背景に設定")
+        btn_capture_frame.clicked.connect(self._capture_preview_frame_at_sec)
+        h_seek.addWidget(btn_capture_frame)
+
+        right_layout.addLayout(h_seek)
 
         self.splitter.addWidget(right_widget)
         self.splitter.setSizes(self.app_settings.get("splitter_sizes", [450, 990]))
@@ -573,11 +599,49 @@ class MainWindow(QMainWindow):
         if path and Path(path).is_file():
             self._load_video_from_path(path)
 
+    def _on_title_dragged(self, index: int, new_x: int, new_y: int):
+        if 1 <= index <= 3:
+            ctrls = self.title_controls[index - 1]
+            ctrls["combo_align_h"].blockSignals(True)
+            ctrls["combo_align_v"].blockSignals(True)
+            ctrls["spin_x"].blockSignals(True)
+            ctrls["spin_y"].blockSignals(True)
+
+            ctrls["combo_align_h"].setCurrentText("カスタム")
+            ctrls["combo_align_v"].setCurrentText("カスタム")
+            ctrls["spin_x"].setValue(new_x)
+            ctrls["spin_y"].setValue(new_y)
+
+            ctrls["combo_align_h"].blockSignals(False)
+            ctrls["combo_align_v"].blockSignals(False)
+            ctrls["spin_x"].blockSignals(False)
+            ctrls["spin_y"].blockSignals(False)
+
+            self._on_title_setting_changed()
+
+    def _play_input_video(self):
+        input_path = self.txt_input_path.text().strip()
+        if input_path and Path(input_path).is_file():
+            subprocess.run(["open", input_path], check=False)
+
+    def _on_preview_sec_changed(self, sec: float):
+        self._capture_preview_frame_at_sec()
+
+    def _capture_preview_frame_at_sec(self):
+        input_path = self.txt_input_path.text().strip()
+        if input_path and Path(input_path).is_file():
+            sec = self.spin_preview_sec.value()
+            frame_png = Path(self.current_temp_dir.name) / f"frame_{sec:.1f}.png"
+            if self.preview_service.capture_frame(input_path, sec, frame_png):
+                self.base_frame_path = frame_png
+                self._update_preview()
+
     def _load_video_from_path(self, file_path: str):
         if not self.process_service:
             return
 
         self.txt_input_path.setText(file_path)
+        self.btn_play_input.setEnabled(True)
         self.app_settings["last_open_dir"] = str(Path(file_path).parent)
         self.settings_service.save_settings(self.app_settings)
 
@@ -627,6 +691,7 @@ class MainWindow(QMainWindow):
 
     def _update_preview(self):
         t_group = self._collect_title_settings()
+        self.preview_widget.set_title_settings(t_group)
         pixmap = self.preview_service.generate_preview_pixmap(self.base_frame_path, t_group)
         self.preview_widget.set_preview_pixmap(pixmap)
 
