@@ -1,10 +1,16 @@
 import logging
-from typing import Optional, List, Tuple
-from PySide6.QtWidgets import QWidget, QLabel, QVBoxLayout
+from pathlib import Path
+from typing import Optional, Tuple
+from PySide6.QtWidgets import (
+    QWidget, QLabel, QVBoxLayout, QHBoxLayout, QPushButton, QSlider, QStackedWidget
+)
 from PySide6.QtGui import QPixmap, QDragEnterEvent, QDropEvent, QMouseEvent
-from PySide6.QtCore import Qt, Signal, QRectF, QPointF
+from PySide6.QtCore import Qt, Signal, QRectF, QPointF, QUrl
+from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
+from PySide6.QtMultimediaWidgets import QVideoWidget
 
 from ..models.title_settings import TitleSettingsGroup, SingleTitleSettings
+from ..utils.time_utils import seconds_to_hms
 
 logger = logging.getLogger(__name__)
 
@@ -17,24 +23,126 @@ class PreviewWidget(QWidget):
         self.setAcceptDrops(True)
         self.setMinimumSize(480, 270)
 
-        self.layout = QVBoxLayout(self)
-        self.layout.setContentsMargins(0, 0, 0, 0)
+        main_v_layout = QVBoxLayout(self)
+        main_v_layout.setContentsMargins(0, 0, 0, 0)
 
+        # 1. Stacked View (Static Preview Frame vs Live Video Player)
+        self.stack = QStackedWidget(self)
+
+        # Page 0: Static Title Drag Preview Label
         self.label = QLabel(self)
         self.label.setAlignment(Qt.AlignCenter)
         self._set_default_style()
-        self.layout.addWidget(self.label)
+        self.stack.addWidget(self.label)
+
+        # Page 1: Direct Video Screen
+        self.video_screen = QVideoWidget(self)
+        self.video_screen.setStyleSheet("background-color: #000000; border-radius: 8px;")
+        self.stack.addWidget(self.video_screen)
+
+        main_v_layout.addWidget(self.stack, 1)
+
+        # 2. Integrated Playback Control Bar (Directly inside right preview panel)
+        ctrl_bar = QHBoxLayout()
+        ctrl_bar.setContentsMargins(4, 4, 4, 4)
+
+        self.btn_play_pause = QPushButton("▶ 再生")
+        self.btn_play_pause.setFixedWidth(80)
+        self.btn_play_pause.setStyleSheet("font-weight: bold; background-color: #007ACC; color: white;")
+        self.btn_play_pause.clicked.connect(self.toggle_play_pause)
+        ctrl_bar.addWidget(self.btn_play_pause)
+
+        self.btn_stop = QPushButton("⏹ 停止")
+        self.btn_stop.setFixedWidth(60)
+        self.btn_stop.clicked.connect(self.stop_video)
+        ctrl_bar.addWidget(self.btn_stop)
+
+        self.lbl_current_time = QLabel("00:00:00")
+        ctrl_bar.addWidget(self.lbl_current_time)
+
+        self.slider_time = QSlider(Qt.Horizontal)
+        self.slider_time.setRange(0, 0)
+        self.slider_time.sliderMoved.connect(self._on_slider_moved)
+        ctrl_bar.addWidget(self.slider_time)
+
+        self.lbl_total_time = QLabel("00:00:00")
+        ctrl_bar.addWidget(self.lbl_total_time)
+
+        ctrl_bar.addSpacing(10)
+        ctrl_bar.addWidget(QLabel("🔊"))
+        self.slider_volume = QSlider(Qt.Horizontal)
+        self.slider_volume.setRange(0, 100)
+        self.slider_volume.setValue(80)
+        self.slider_volume.setFixedWidth(70)
+        self.slider_volume.valueChanged.connect(self._on_volume_changed)
+        ctrl_bar.addWidget(self.slider_volume)
+
+        main_v_layout.addLayout(ctrl_bar)
+
+        # 3. Setup QMediaPlayer
+        self.player = QMediaPlayer(self)
+        self.audio_output = QAudioOutput(self)
+        self.player.setAudioOutput(self.audio_output)
+        self.player.setVideoOutput(self.video_screen)
+
+        self.audio_output.setVolume(0.8)
+
+        self.player.positionChanged.connect(self._on_position_changed)
+        self.player.durationChanged.connect(self._on_duration_changed)
 
         self.current_pixmap: QPixmap = QPixmap(1280, 720)
         self.current_pixmap.fill(Qt.black)
 
         self.title_settings: Optional[TitleSettingsGroup] = None
+        self.video_path: Optional[str] = None
         self.dragging_title_index: Optional[int] = None
         self.drag_start_pos: Optional[QPointF] = None
         self.title_start_x: int = 0
         self.title_start_y: int = 0
 
         self.update_display()
+
+    def set_video_source(self, video_path: str):
+        self.video_path = video_path
+        if Path(video_path).is_file():
+            self.player.setSource(QUrl.fromLocalFile(video_path))
+            self.btn_play_pause.setEnabled(True)
+
+    def toggle_play_pause(self):
+        if not self.video_path or not Path(self.video_path).is_file():
+            return
+
+        if self.player.playbackState() == QMediaPlayer.PlayingState:
+            self.player.pause()
+            self.btn_play_pause.setText("▶ 再生")
+            # Return to title editing preview frame
+            self.stack.setCurrentIndex(0)
+        else:
+            self.stack.setCurrentIndex(1)
+            self.player.play()
+            self.btn_play_pause.setText("⏸ 一時停止")
+
+    def stop_video(self):
+        self.player.stop()
+        self.btn_play_pause.setText("▶ 再生")
+        self.stack.setCurrentIndex(0)
+
+    def _on_position_changed(self, position_ms: int):
+        if not self.slider_time.isSliderDown():
+            self.slider_time.setValue(position_ms)
+        sec = position_ms / 1000.0
+        self.lbl_current_time.setText(seconds_to_hms(sec))
+
+    def _on_duration_changed(self, duration_ms: int):
+        self.slider_time.setRange(0, duration_ms)
+        sec = duration_ms / 1000.0
+        self.lbl_total_time.setText(seconds_to_hms(sec))
+
+    def _on_slider_moved(self, position_ms: int):
+        self.player.setPosition(position_ms)
+
+    def _on_volume_changed(self, val: int):
+        self.audio_output.setVolume(val / 100.0)
 
     def set_title_settings(self, title_settings: TitleSettingsGroup):
         self.title_settings = title_settings
@@ -90,7 +198,6 @@ class PreviewWidget(QWidget):
     # --- Mouse Dragging Support for Title Positioning ---
 
     def _get_canvas_scaling(self) -> Tuple[float, float, float, float]:
-        """Returns (offset_x, offset_y, scaled_w, scaled_h) of pixmap within QLabel."""
         if self.current_pixmap.isNull() or self.label.width() <= 0 or self.label.height() <= 0:
             return 0.0, 0.0, 1.0, 1.0
 
@@ -112,7 +219,6 @@ class PreviewWidget(QWidget):
     def _window_pos_to_1280_coords(self, pos: QPointF) -> Optional[Tuple[int, int]]:
         offset_x, offset_y, scaled_w, scaled_h = self._get_canvas_scaling()
 
-        # Map label local pos
         lbl_pos = self.label.mapFrom(self, pos.toPoint())
         lx = lbl_pos.x() - offset_x
         ly = lbl_pos.y() - offset_y
@@ -129,11 +235,10 @@ class PreviewWidget(QWidget):
         return max(0, min(1280, canvas_x)), max(0, min(720, canvas_y))
 
     def mousePressEvent(self, event: QMouseEvent):
-        if event.button() == Qt.LeftButton and self.title_settings:
+        if self.stack.currentIndex() == 0 and event.button() == Qt.LeftButton and self.title_settings:
             coords = self._window_pos_to_1280_coords(event.position())
             if coords:
                 cx, cy = coords
-                # Check closest title 1..3
                 titles = [
                     (1, self.title_settings.title1),
                     (2, self.title_settings.title2),
@@ -145,12 +250,11 @@ class PreviewWidget(QWidget):
 
                 for idx, t in titles:
                     if t.enabled and t.text.strip():
-                        # Effective position
                         tx = t.x if t.align_h == "カスタム" else 640
                         ty = t.y if t.align_v == "カスタム" else (60 if idx == 1 else (360 if idx == 2 else 660))
 
                         dist = ((cx - tx) ** 2 + (cy - ty) ** 2) ** 0.5
-                        if dist < min_dist and dist < 300:  # Search radius threshold
+                        if dist < min_dist and dist < 300:
                             min_dist = dist
                             closest_idx = idx
 
@@ -169,7 +273,7 @@ class PreviewWidget(QWidget):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent):
-        if self.dragging_title_index and self.drag_start_pos:
+        if self.stack.currentIndex() == 0 and self.dragging_title_index and self.drag_start_pos:
             offset_x, offset_y, scaled_w, scaled_h = self._get_canvas_scaling()
             if scaled_w > 0 and scaled_h > 0:
                 delta_lbl_x = event.position().x() - self.drag_start_pos.x()

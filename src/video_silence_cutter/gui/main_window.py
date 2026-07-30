@@ -652,6 +652,7 @@ class MainWindow(QMainWindow):
         self.txt_input_path.setText(file_path)
         self.btn_play_input.setEnabled(True)
         self.btn_play_top.setEnabled(True)
+        self.preview_widget.set_video_source(file_path)
         self.app_settings["last_open_dir"] = str(Path(file_path).parent)
         self.settings_service.save_settings(self.app_settings)
 
