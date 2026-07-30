@@ -1,0 +1,24 @@
+# Virtual environment
+.venv/
+venv/
+ENV/
+
+# PyInstaller / Build artifacts
+build/
+dist/
+*.spec.bak
+
+# Python byte code & cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+
+# macOS system files
+.DS_Store
+
+# Video Silence Cutter temp files
+*.processing.mp4
+assets/AppIcon.iconset/
