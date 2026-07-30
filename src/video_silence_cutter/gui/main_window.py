@@ -252,37 +252,64 @@ class MainWindow(QMainWindow):
         right_layout.setContentsMargins(0, 0, 0, 0)
 
         h_prev_top = QHBoxLayout()
-        lbl_prev_header = QLabel("<b>動画レイアウトプレビュー (1280x720) - マウスでタイトルを移動可能</b>")
+        lbl_prev_header = QLabel("<b>動画レイアウトプレビュー (1280x720) - マウスでタイトル移動可能</b>")
         h_prev_top.addWidget(lbl_prev_header)
         h_prev_top.addStretch()
-
-        self.btn_play_input = QPushButton("▶ 内蔵プレイヤーで再生")
-        self.btn_play_input.setEnabled(False)
-        self.btn_play_input.clicked.connect(self._play_input_video)
-        h_prev_top.addWidget(self.btn_play_input)
-
         right_layout.addLayout(h_prev_top)
 
+        # Main Preview Canvas Area
         self.preview_widget = PreviewWidget()
         self.preview_widget.file_dropped_signal.connect(self._load_video_from_path)
         self.preview_widget.title_position_dragged_signal.connect(self._on_title_dragged)
-        right_layout.addWidget(self.preview_widget)
+        right_layout.addWidget(self.preview_widget, 1)
 
-        # Preview Frame Seek Bar
-        h_seek = QHBoxLayout()
-        h_seek.addWidget(QLabel("プレビュー確認フレーム (秒):"))
-        self.spin_preview_sec = QDoubleSpinBox()
-        self.spin_preview_sec.setRange(0.0, 86400.0)
-        self.spin_preview_sec.setValue(1.0)
-        self.spin_preview_sec.setSingleStep(1.0)
-        self.spin_preview_sec.valueChanged.connect(self._on_preview_sec_changed)
-        h_seek.addWidget(self.spin_preview_sec)
+        # Player & Timeline Seek Bar Layout Directly Under Preview Canvas
+        player_box = QGroupBox("動画タイムライン・再生コントロール", right_widget)
+        player_layout = QVBoxLayout(player_box)
+        player_layout.setContentsMargins(8, 8, 8, 8)
 
-        btn_capture_frame = QPushButton("このフレームを背景に設定")
-        btn_capture_frame.clicked.connect(self._capture_preview_frame_at_sec)
-        h_seek.addWidget(btn_capture_frame)
+        # Timeline Slider Line
+        h_time_line = QHBoxLayout()
 
-        right_layout.addLayout(h_seek)
+        self.btn_play_preview = QPushButton("▶ 再生")
+        self.btn_play_preview.setFixedWidth(80)
+        self.btn_play_preview.setStyleSheet("font-weight: bold; background-color: #007ACC; color: white; padding: 4px 8px;")
+        self.btn_play_preview.setEnabled(False)
+        self.btn_play_preview.clicked.connect(self._toggle_preview_play)
+        h_time_line.addWidget(self.btn_play_preview)
+
+        self.btn_stop_preview = QPushButton("⏹ 停止")
+        self.btn_stop_preview.setFixedWidth(60)
+        self.btn_stop_preview.setEnabled(False)
+        self.btn_stop_preview.clicked.connect(self._stop_preview_play)
+        h_time_line.addWidget(self.btn_stop_preview)
+
+        self.lbl_seek_curr_time = QLabel("00:00:00")
+        h_time_line.addWidget(self.lbl_seek_curr_time)
+
+        # High precision timeline slider bar (0 to 1000)
+        self.slider_video_timeline = QSlider(Qt.Horizontal)
+        self.slider_video_timeline.setRange(0, 1000)
+        self.slider_video_timeline.setValue(0)
+        self.slider_video_timeline.setEnabled(False)
+        self.slider_video_timeline.sliderMoved.connect(self._on_timeline_slider_moved)
+        self.slider_video_timeline.valueChanged.connect(self._on_timeline_slider_changed)
+        h_time_line.addWidget(self.slider_video_timeline, 1)
+
+        self.lbl_seek_total_time = QLabel("00:00:00")
+        h_time_line.addWidget(self.lbl_seek_total_time)
+
+        h_time_line.addSpacing(10)
+        h_time_line.addWidget(QLabel("🔊"))
+        self.slider_volume = QSlider(Qt.Horizontal)
+        self.slider_volume.setRange(0, 100)
+        self.slider_volume.setValue(80)
+        self.slider_volume.setFixedWidth(70)
+        self.slider_volume.valueChanged.connect(self._on_volume_changed)
+        h_time_line.addWidget(self.slider_volume)
+
+        player_layout.addLayout(h_time_line)
+        right_layout.addWidget(player_box)
 
         self.splitter.addWidget(right_widget)
         self.splitter.setSizes(self.app_settings.get("splitter_sizes", [450, 990]))
@@ -627,30 +654,43 @@ class MainWindow(QMainWindow):
 
             self._on_title_setting_changed()
 
-    def _play_input_video(self):
-        input_path = self.txt_input_path.text().strip()
-        if input_path and Path(input_path).is_file():
-            dlg = VideoPlayerDialog(input_path, title=f"元動画の再生確認 - {Path(input_path).name}", parent=self)
-            dlg.exec()
+    def _toggle_preview_play(self):
+        self.preview_widget.toggle_play_pause()
+        if self.preview_widget.player.playbackState() == QMediaPlayer.PlayingState:
+            self.btn_play_preview.setText("⏸ 一時停止")
+        else:
+            self.btn_play_preview.setText("▶ 再生")
 
-    def _on_preview_sec_changed(self, sec: float):
-        self._capture_preview_frame_at_sec()
+    def _stop_preview_play(self):
+        self.preview_widget.stop_video()
+        self.btn_play_preview.setText("▶ 再生")
 
-    def _capture_preview_frame_at_sec(self):
-        input_path = self.txt_input_path.text().strip()
-        if input_path and Path(input_path).is_file():
-            sec = self.spin_preview_sec.value()
-            frame_png = Path(self.current_temp_dir.name) / f"frame_{sec:.1f}.png"
-            if self.preview_service.capture_frame(input_path, sec, frame_png):
-                self.base_frame_path = frame_png
-                self._update_preview()
+    def _on_timeline_slider_moved(self, val: int):
+        if self.current_video_info and self.current_video_info.duration_seconds > 0:
+            sec = (val / 1000.0) * self.current_video_info.duration_seconds
+            self.lbl_seek_curr_time.setText(seconds_to_hms(sec))
+            input_path = self.txt_input_path.text().strip()
+            if input_path and Path(input_path).is_file():
+                frame_png = Path(self.current_temp_dir.name) / f"frame_seek_{val}.png"
+                if self.preview_service.capture_frame(input_path, sec, frame_png):
+                    self.base_frame_path = frame_png
+                    self._update_preview()
+
+    def _on_timeline_slider_changed(self, val: int):
+        if not self.slider_video_timeline.isSliderDown():
+            self._on_timeline_slider_moved(val)
+
+    def _on_volume_changed(self, val: int):
+        self.preview_widget.audio_output.setVolume(val / 100.0)
 
     def _load_video_from_path(self, file_path: str):
         if not self.process_service:
             return
 
         self.txt_input_path.setText(file_path)
-        self.btn_play_input.setEnabled(True)
+        self.btn_play_preview.setEnabled(True)
+        self.btn_stop_preview.setEnabled(True)
+        self.slider_video_timeline.setEnabled(True)
         self.btn_play_top.setEnabled(True)
         self.preview_widget.set_video_source(file_path)
         self.app_settings["last_open_dir"] = str(Path(file_path).parent)
@@ -670,6 +710,7 @@ class MainWindow(QMainWindow):
                 f"<b>音声:</b> {v_info.audio_codec or 'なし'}"
             )
             self.lbl_video_info.setText(info_str)
+            self.lbl_seek_total_time.setText(seconds_to_hms(v_info.duration_seconds))
 
             # Auto set range end
             self.txt_range_start.setText("00:00:00")
