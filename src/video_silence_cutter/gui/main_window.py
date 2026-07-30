@@ -215,9 +215,16 @@ class MainWindow(QMainWindow):
         h_select.addWidget(QLabel("入力ファイル:"))
         h_select.addWidget(self.txt_input_path)
         h_select.addWidget(btn_browse)
+
+        self.btn_play_top = QPushButton("▶ アプリ内プレイヤーで元動画を再生")
+        self.btn_play_top.setStyleSheet("font-weight: bold; background-color: #2e7d32; color: white; padding: 5px 10px;")
+        self.btn_play_top.setEnabled(False)
+        self.btn_play_top.clicked.connect(self._play_input_video)
+        h_select.addWidget(self.btn_play_top)
+
         top_layout.addLayout(h_select)
 
-        self.lbl_video_info = QLabel("動画未選択")
+        self.lbl_video_info = QLabel("動画未選択 (動画ファイルを上記にドラッグ＆ドロップしてください)")
         self.lbl_video_info.setStyleSheet("color: #888888; font-size: 12px; margin-top: 4px;")
         top_layout.addWidget(self.lbl_video_info)
 
@@ -249,7 +256,7 @@ class MainWindow(QMainWindow):
         h_prev_top.addWidget(lbl_prev_header)
         h_prev_top.addStretch()
 
-        self.btn_play_input = QPushButton("▶ 元動画を再生確認")
+        self.btn_play_input = QPushButton("▶ 内蔵プレイヤーで再生")
         self.btn_play_input.setEnabled(False)
         self.btn_play_input.clicked.connect(self._play_input_video)
         h_prev_top.addWidget(self.btn_play_input)
@@ -644,6 +651,7 @@ class MainWindow(QMainWindow):
 
         self.txt_input_path.setText(file_path)
         self.btn_play_input.setEnabled(True)
+        self.btn_play_top.setEnabled(True)
         self.app_settings["last_open_dir"] = str(Path(file_path).parent)
         self.settings_service.save_settings(self.app_settings)
 
@@ -802,7 +810,7 @@ class MainWindow(QMainWindow):
         self.settings_service.save_settings(self.app_settings)
         return TitleSettingsGroup(title1=titles[0], title2=titles[1], title3=titles[2])
 
-    def _collect_silence_settings() -> SilenceSettings:
+    def _collect_silence_settings(self) -> SilenceSettings:
         start_sec = 0.0
         end_sec = 0.0
         if validate_hms(self.txt_range_start.text()):
