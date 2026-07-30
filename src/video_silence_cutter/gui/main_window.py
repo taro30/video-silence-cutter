@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter, QTabWidget,
     QLabel, QLineEdit, QPushButton, QCheckBox, QDoubleSpinBox, QSpinBox,
     QComboBox, QProgressBar, QTextEdit, QFileDialog, QMessageBox, QGroupBox,
-    QFormLayout, QColorDialog, QApplication
+    QFormLayout, QColorDialog, QApplication, QSlider
 )
 from PySide6.QtGui import QAction, QKeySequence, QPixmap, QColor
 from PySide6.QtCore import Qt, QTimer, QSize
@@ -216,10 +216,10 @@ class MainWindow(QMainWindow):
         h_select.addWidget(self.txt_input_path)
         h_select.addWidget(btn_browse)
 
-        self.btn_play_top = QPushButton("▶ アプリ内プレイヤーで元動画を再生")
+        self.btn_play_top = QPushButton("▶ プレビューで元動画を再生")
         self.btn_play_top.setStyleSheet("font-weight: bold; background-color: #2e7d32; color: white; padding: 5px 10px;")
         self.btn_play_top.setEnabled(False)
-        self.btn_play_top.clicked.connect(self._play_input_video)
+        self.btn_play_top.clicked.connect(self._toggle_preview_play)
         h_select.addWidget(self.btn_play_top)
 
         top_layout.addLayout(h_select)
