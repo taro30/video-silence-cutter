@@ -131,8 +131,50 @@ class TitleRenderer:
         return output_path
 
     @staticmethod
+    def render_composite_title_image(
+        title_settings_list: list,
+        output_path: Path,
+        video_width: int = 1280,
+        video_height: int = 720,
+    ) -> Optional[Path]:
+        """
+        複数のタイトル設定を1枚の透過PNGに合成して生成する。
+        FFmpeg の overlay 操作を1回に削減してエンコード速度を大幅改善。
+        """
+        try:
+            from PIL import Image
+        except ImportError:
+            logger.error("Pillow (PIL) が見つかりません。")
+            return None
+
+        # 動画サイズの透過キャンバスに全タイトルを重ね描き
+        composite = Image.new("RGBA", (video_width, video_height), (0, 0, 0, 0))
+
+        for t_setting in title_settings_list:
+            if not t_setting.enabled or not t_setting.text.strip():
+                continue
+            # 各タイトルを個別に描画してから合成
+            import tempfile as _tf
+            tmp_path = Path(_tf.mktemp(suffix=".png"))
+            rendered = TitleRenderer.render_title_image(
+                t_setting, tmp_path, video_width, video_height
+            )
+            if rendered and tmp_path.exists():
+                layer = Image.open(str(tmp_path)).convert("RGBA")
+                composite = Image.alpha_composite(composite, layer)
+                try:
+                    tmp_path.unlink()
+                except Exception:
+                    pass
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        composite.save(str(output_path), "PNG")
+        logger.debug(f"Composite title image generated: {output_path}")
+        return output_path
+
+    @staticmethod
     def build_overlay_filter(
-        title_setting: SingleTitleSettings,
+        title_setting,
         title_image_path: Path,
         input_idx: int,
         video_width: int = 1280,
@@ -140,14 +182,10 @@ class TitleRenderer:
     ) -> str:
         """
         FFmpeg overlay フィルター文字列を生成する。
-        title_image_path は動画と同じサイズの透過PNG。
-        enable パラメータで表示時間を制御。
         """
         enable = ""
         if title_setting.start_time >= 0 and title_setting.end_time > title_setting.start_time:
             enable = f":enable='between(t,{title_setting.start_time},{title_setting.end_time})'"
-
-        # overlay=0:0 で左上原点に重ねる（画像自体が正しい位置に描画済み）
         return f"overlay=0:0{enable}"
 
     @staticmethod

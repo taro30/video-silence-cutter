@@ -67,18 +67,24 @@ class VideoProcessor:
 
         # Encoder options
         if settings.encoder == "h264_videotoolbox":
-            cmd.extend(["-c:v", "h264_videotoolbox"])
+            cmd.extend([
+                "-c:v", "h264_videotoolbox",
+                "-b:v", settings.video_bitrate,
+                "-pix_fmt", settings.pix_fmt,
+                "-g", str(settings.gop),
+                "-allow_sw", "1",          # ソフトウェアフォールバックを許可
+            ])
         else:
-            cmd.extend(["-c:v", "libx264"])
-
-        cmd.extend([
-            "-pix_fmt", settings.pix_fmt,
-            "-b:v", settings.video_bitrate,
-            "-maxrate", settings.max_bitrate,
-            "-bufsize", settings.bufsize,
-            "-g", str(settings.gop),
-            "-bf", str(settings.bframes),
-        ])
+            cmd.extend([
+                "-c:v", "libx264",
+                "-preset", "fast",         # エンコード速度優先
+                "-pix_fmt", settings.pix_fmt,
+                "-b:v", settings.video_bitrate,
+                "-maxrate", settings.max_bitrate,
+                "-bufsize", settings.bufsize,
+                "-g", str(settings.gop),
+                "-bf", str(settings.bframes),
+            ])
 
         # タイトル画像を -loop 1 で入力している場合、動画が終わり次第停止させる
         if title_image_paths:

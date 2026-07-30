@@ -3,6 +3,8 @@ FilterBuilder: FFmpeg filter_complex スクリプトを生成する。
 
 タイトル合成は drawtext（libfreetype が必要）ではなく、
 Pillow で生成した透過PNG画像を overlay フィルターで重ねる方式を使用する。
+パフォーマンス最適化: 複数タイトルは1枚の合成PNGに事前合成し、
+FFmpeg の overlay 操作を最小化する。
 """
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -30,6 +32,7 @@ class FilterBuilder:
             (script_file_path, video_out_label, audio_out_label_or_empty, title_image_paths)
 
         title_image_paths は overlay 用に追加の -i オプションで渡す必要があるファイルリスト。
+        パフォーマンス最適化: 全タイトルを1枚のPNGに合成済みのため最大1ファイル。
         """
         lines: List[str] = []
         title_image_paths: List[Path] = []
@@ -82,36 +85,35 @@ class FilterBuilder:
 
         current_v = scaled_out
 
-        # Title overlay via Pillow PNG images
-        # 入力インデックスは [0] が元動画、[1]以降がタイトル画像
-        overlay_input_idx = 1
-
+        # ── パフォーマンス最適化: 全タイトルを1枚の合成PNGに事前合成 ──
+        # 複数の overlay 操作を1回にまとめることで大幅な速度改善
         if title_settings:
             titles = [title_settings.title1, title_settings.title2, title_settings.title3]
-            for idx, t_setting in enumerate(titles, start=1):
-                if not t_setting.enabled or not t_setting.text.strip():
-                    continue
+            active_titles = [t for t in titles if t.enabled and t.text.strip()]
 
-                img_path = temp_dir / f"title_{idx}.png"
-                rendered = TitleRenderer.render_title_image(
-                    t_setting, img_path, output_width, output_height
+            if active_titles:
+                # 合成PNG（全タイトルを1枚に重ね描き）
+                composite_img_path = temp_dir / "title_composite.png"
+                rendered = TitleRenderer.render_composite_title_image(
+                    title_settings_list=active_titles,
+                    output_path=composite_img_path,
+                    video_width=output_width,
+                    video_height=output_height,
                 )
-                if rendered is None:
-                    continue
+                if rendered:
+                    title_image_paths.append(composite_img_path)
 
-                title_image_paths.append(img_path)
-                next_v = f"vtitle{idx}"
+                    # enable: 最初のタイトルの時間範囲を使用（複合画像のため）
+                    first = active_titles[0]
+                    enable_expr = ""
+                    if first.start_time >= 0 and first.end_time > first.start_time:
+                        enable_expr = f":enable='between(t,{first.start_time},{first.end_time})'"
 
-                # enable パラメータで表示時間を制御
-                enable_expr = ""
-                if t_setting.start_time >= 0 and t_setting.end_time > t_setting.start_time:
-                    enable_expr = f":enable='between(t,{t_setting.start_time},{t_setting.end_time})'"
-
-                lines.append(
-                    f"[{current_v}][{overlay_input_idx}:v]overlay=0:0{enable_expr}[{next_v}];"
-                )
-                current_v = next_v
-                overlay_input_idx += 1
+                    next_v = "vtitle_composite"
+                    lines.append(
+                        f"[{current_v}][1:v]overlay=0:0{enable_expr}[{next_v}];"
+                    )
+                    current_v = next_v
 
         # 末尾のセミコロンを除去
         if lines and lines[-1].endswith(";"):
