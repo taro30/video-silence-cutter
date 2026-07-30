@@ -42,14 +42,15 @@ class FilterBuilder:
             if interval.end > 0:
                 trim_opts.append(f"end={interval.end:.4f}")
 
-            trim_str = ":" + ":".join(trim_opts) if trim_opts else ""
+            trim_filter = f"trim={':'.join(trim_opts)}," if trim_opts else ""
+            atrim_filter = f"atrim={':'.join(trim_opts)}," if trim_opts else ""
 
             # Video trim
-            lines.append(f"[0:v]trim={trim_str},setpts=PTS-STARTPTS[{v_label}];")
+            lines.append(f"[0:v]{trim_filter}setpts=PTS-STARTPTS[{v_label}];")
 
             # Audio trim (if audio exists)
             if has_audio:
-                lines.append(f"[0:a]atrim={trim_str},asetpts=PTS-STARTPTS[{a_label}];")
+                lines.append(f"[0:a]{atrim_filter}asetpts=PTS-STARTPTS[{a_label}];")
 
         # Concat step
         v_concat_out = "vconcat"

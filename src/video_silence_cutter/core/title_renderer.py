@@ -23,18 +23,18 @@ class TitleRenderer:
                 font_path = resolved
 
         # Escape paths for ffmpeg drawtext filter
-        escaped_textfile = str(text_file_path.resolve()).replace(":", "\\:").replace("'", "'\\''")
-
+        # In filter_complex_script, backslash and colon and single quotes need escaping
+        raw_textfile = str(text_file_path.resolve()).replace("\\", "/").replace(":", "\\:").replace("'", "'\\''")
         opts: List[str] = [
-            f"textfile='{escaped_textfile}'",
+            f"textfile='{raw_textfile}'",
             "reload=1",
             f"fontsize={title_setting.font_size}",
             f"fontcolor={title_setting.font_color}",
         ]
 
         if font_path and Path(font_path).is_file():
-            escaped_fontfile = str(Path(font_path).resolve()).replace(":", "\\:").replace("'", "'\\''")
-            opts.append(f"fontfile='{escaped_fontfile}'")
+            raw_fontfile = str(Path(font_path).resolve()).replace("\\", "/").replace(":", "\\:").replace("'", "'\\''")
+            opts.append(f"fontfile='{raw_fontfile}'")
 
         # X position
         align_h = title_setting.align_h

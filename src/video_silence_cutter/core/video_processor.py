@@ -129,7 +129,10 @@ class VideoProcessor:
                 logger.error(f"FFmpeg encoding failed with exit code {self._process.returncode}: {stderr_err}")
                 if temp_out_file.exists():
                     temp_out_file.unlink()
-                raise RuntimeError(f"FFmpegエンコードエラー: {stderr_err[:200]}")
+                # Get meaningful tail error message
+                err_tail = stderr_err.strip().splitlines()[-10:] if stderr_err else ["不明なFFmpegエラー"]
+                err_msg = "\n".join(err_tail)
+                raise RuntimeError(f"FFmpegエンコードエラー:\n{err_msg}")
 
             # Atomic rename to final output
             if temp_out_file.exists():
