@@ -19,12 +19,26 @@ class PreviewWidget(QWidget):
 
         self.label = QLabel(self)
         self.label.setAlignment(Qt.AlignCenter)
-        self.label.setStyleSheet("background-color: #1a1a1a; border: 1px solid #333333; border-radius: 4px;")
+        self._set_default_style()
         self.layout.addWidget(self.label)
 
         self.current_pixmap: QPixmap = QPixmap(1280, 720)
         self.current_pixmap.fill(Qt.black)
         self.update_display()
+
+    def _set_default_style(self):
+        self.label.setStyleSheet(
+            "background-color: #18181b; "
+            "border: 2px dashed #3f3f46; "
+            "border-radius: 8px;"
+        )
+
+    def _set_active_drag_style(self):
+        self.label.setStyleSheet(
+            "background-color: #27272a; "
+            "border: 2px dashed #007acc; "
+            "border-radius: 8px;"
+        )
 
     def set_preview_pixmap(self, pixmap: QPixmap):
         self.current_pixmap = pixmap
@@ -46,8 +60,14 @@ class PreviewWidget(QWidget):
     def dragEnterEvent(self, event: QDragEnterEvent):
         if event.mimeData().hasUrls():
             event.acceptProposedAction()
+            self._set_active_drag_style()
+
+    def dragLeaveEvent(self, event):
+        self._set_default_style()
+        super().dragLeaveEvent(event)
 
     def dropEvent(self, event: QDropEvent):
+        self._set_default_style()
         urls = event.mimeData().urls()
         if urls:
             file_path = urls[0].toLocalFile()

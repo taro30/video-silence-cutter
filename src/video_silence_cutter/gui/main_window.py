@@ -71,8 +71,81 @@ class MainWindow(QMainWindow):
 
         self._setup_menu_bar()
         self._init_ui()
+        self._apply_theme()
         self._load_ui_from_settings()
         self._check_ffmpeg_on_startup()
+
+    def _apply_theme(self):
+        self.setStyleSheet("""
+            QMainWindow {
+                background-color: #1e1e2e;
+                color: #cdd6f4;
+            }
+            QGroupBox {
+                font-weight: bold;
+                border: 1px solid #45475a;
+                border-radius: 8px;
+                margin-top: 6px;
+                padding-top: 10px;
+                background-color: #181825;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 12px;
+                padding: 0 4px;
+                color: #89b4fa;
+            }
+            QTabWidget::pane {
+                border: 1px solid #45475a;
+                border-radius: 6px;
+                background-color: #181825;
+            }
+            QTabBar::tab {
+                background: #313244;
+                color: #cdd6f4;
+                padding: 8px 16px;
+                border-top-left-radius: 6px;
+                border-top-right-radius: 6px;
+                margin-right: 2px;
+            }
+            QTabBar::tab:selected {
+                background: #89b4fa;
+                color: #11111b;
+                font-weight: bold;
+            }
+            QPushButton {
+                background-color: #313244;
+                color: #cdd6f4;
+                border: 1px solid #45475a;
+                border-radius: 6px;
+                padding: 6px 14px;
+                font-size: 13px;
+            }
+            QPushButton:hover {
+                background-color: #45475a;
+            }
+            QPushButton:pressed {
+                background-color: #585b70;
+            }
+            QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {
+                background-color: #313244;
+                color: #cdd6f4;
+                border: 1px solid #45475a;
+                border-radius: 4px;
+                padding: 4px 8px;
+            }
+            QProgressBar {
+                border: 1px solid #45475a;
+                border-radius: 6px;
+                text-align: center;
+                background-color: #313244;
+                color: #ffffff;
+            }
+            QProgressBar::chunk {
+                background-color: #89b4fa;
+                border-radius: 5px;
+            }
+        """)
 
     def _setup_menu_bar(self):
         menubar = self.menuBar()
