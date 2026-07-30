@@ -581,12 +581,24 @@ class MainWindow(QMainWindow):
         self.txt_range_start = QLineEdit("00:00:00")
         self.txt_range_end = QLineEdit("00:00:00")
 
+        btn_set_start = QPushButton("✂️ 現在位置を開始点に設定")
+        btn_set_start.clicked.connect(self._set_range_start_to_current)
+        h_range_start = QHBoxLayout()
+        h_range_start.addWidget(self.txt_range_start)
+        h_range_start.addWidget(btn_set_start)
+
+        btn_set_end = QPushButton("✂️ 現在位置を終了点に設定")
+        btn_set_end.clicked.connect(self._set_range_end_to_current)
+        h_range_end = QHBoxLayout()
+        h_range_end.addWidget(self.txt_range_end)
+        h_range_end.addWidget(btn_set_end)
+
         form.addRow(self.chk_silence_enable)
         form.addRow("無音判定レベル:", self.spin_thresh)
         form.addRow("最小無音時間:", self.spin_min_dur)
         form.addRow("前後余白:", self.spin_padding)
-        form.addRow("処理開始時間 (HH:MM:SS):", self.txt_range_start)
-        form.addRow("処理終了時間 (HH:MM:SS):", self.txt_range_end)
+        form.addRow("切り出し開始時間 (HH:MM:SS):", h_range_start)
+        form.addRow("切り出し終了時間 (00:00:00=末尾):", h_range_end)
 
         self.tabs_controls.addTab(tab_silence, "無音検出・範囲設定")
 
@@ -616,6 +628,18 @@ class MainWindow(QMainWindow):
         form.addRow("", lbl_fast_note)
 
         self.tabs_controls.addTab(tab_output, "出力設定")
+
+    def _set_range_start_to_current(self):
+        hms_str = seconds_to_hms(self.current_preview_sec)
+        self.txt_range_start.setText(hms_str)
+        self._log_message(f"✂️ 切り出し開始時間を設定: {hms_str}")
+        self._on_title_setting_changed()
+
+    def _set_range_end_to_current(self):
+        hms_str = seconds_to_hms(self.current_preview_sec)
+        self.txt_range_end.setText(hms_str)
+        self._log_message(f"✂️ 切り出し終了時間を設定: {hms_str}")
+        self._on_title_setting_changed()
 
     def _pick_color(self, button: QPushButton):
         curr_hex = button.property("hex_color") or "#FFFFFF"

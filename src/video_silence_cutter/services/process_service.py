@@ -155,29 +155,84 @@ class ProcessService:
                     progress_callback=enc_cb
                 )
 
-            # ── 【タイトル合成あり】高速フィルター ＋ ハードウェアエンコード ──
+            # ── 【タイトル合成あり】スマートハイブリッドパス（タイトル表示部のみエンコード、残りはStream Copy） ──
             else:
-                logger.info("タイトル合成あり: フィルター complex + エンコードパスを実行します。")
-                script_path, v_label, a_label, title_image_paths = FilterBuilder.build_filter_script(
-                    keep_intervals=keeps,
-                    has_audio=v_info.has_audio,
-                    title_settings=title_settings,
-                    temp_dir=temp_dir,
-                    output_width=output_settings.width,
-                    output_height=output_settings.height,
-                    fps_fraction=output_settings.fps_str
-                )
+                # 有効なタイトルの最大終了時刻を算出
+                max_title_end = 0.0
+                if title_settings:
+                    for t_setting in [title_settings.title1, title_settings.title2, title_settings.title3]:
+                        if t_setting.enabled and t_setting.text.strip():
+                            max_title_end = max(max_title_end, t_setting.end_time)
 
-                self.video_processor.process_video(
-                    input_path=input_path,
+                logger.info(f"タイトル合成あり: 最大タイトル表示時刻 = {max_title_end:.2f}s")
+
+                title_keeps = [k for k in keeps if k.start < max_title_end]
+                copy_keeps = [k for k in keeps if k.start >= max_title_end]
+
+                seg_paths: List[Path] = []
+
+                # Part 1: タイトル表示範囲の区間（ここだけタイトル画像合成エンコード）
+                if title_keeps:
+                    logger.info(f"タイトル適用区間 ({len(title_keeps)}件) のエンコードを開始")
+                    seg_title_out = temp_dir / "seg_title_encoded.mp4"
+
+                    # タイトル区間のみのフィルター生成
+                    script_path, v_label, a_label, title_image_paths = FilterBuilder.build_filter_script(
+                        keep_intervals=title_keeps,
+                        has_audio=v_info.has_audio,
+                        title_settings=title_settings,
+                        temp_dir=temp_dir,
+                        output_width=output_settings.width,
+                        output_height=output_settings.height,
+                        fps_fraction=output_settings.fps_str
+                    )
+
+                    title_expected_dur = sum(k.duration for k in title_keeps)
+                    self.video_processor.process_video(
+                        input_path=input_path,
+                        output_path=str(seg_title_out),
+                        filter_script_path=script_path,
+                        v_label=v_label,
+                        a_label=a_label,
+                        settings=output_settings,
+                        expected_duration=title_expected_dur,
+                        progress_callback=enc_cb,
+                        title_image_paths=title_image_paths
+                    )
+                    seg_paths.append(seg_title_out)
+
+                # Part 2: タイトル表示終了後の残り全区間（無再エンコード Stream Copy で即切断）
+                if copy_keeps:
+                    logger.info(f"タイトル終了後区間 ({len(copy_keeps)}件) の Stream Copy 抽出を開始")
+                    for idx, interval in enumerate(copy_keeps):
+                        seg_copy_path = temp_dir / f"seg_copy_{idx:04d}.mp4"
+                        cmd_cut = [
+                            str(self.locator.find_ffmpeg()),
+                            "-y", "-loglevel", "error",
+                            "-ss", f"{interval.start:.4f}",
+                        ]
+                        if interval.end > 0:
+                            cmd_cut.extend(["-to", f"{interval.end:.4f}"])
+
+                        cmd_cut.extend([
+                            "-i", input_path,
+                            "-c", "copy",
+                            "-avoid_negative_ts", "make_zero",
+                            str(seg_copy_path)
+                        ])
+                        subprocess.run(cmd_cut, check=True)
+                        seg_paths.append(seg_copy_path)
+
+                # 全セグメントを Concat Demuxer で一括結合
+                concat_list_file = temp_dir / "concat_list.txt"
+                lines = [f"file '{p.resolve()}'" for p in seg_paths]
+                concat_list_file.write_text("\n".join(lines), encoding="utf-8")
+
+                self.video_processor.process_concat_demuxer(
+                    concat_list_path=concat_list_file,
                     output_path=output_path,
-                    filter_script_path=script_path,
-                    v_label=v_label,
-                    a_label=a_label,
-                    settings=output_settings,
                     expected_duration=expected_output_duration,
-                    progress_callback=enc_cb,
-                    title_image_paths=title_image_paths
+                    progress_callback=enc_cb
                 )
 
             # Step 5: Output validation
