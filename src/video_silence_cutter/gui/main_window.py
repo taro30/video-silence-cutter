@@ -329,12 +329,33 @@ class MainWindow(QMainWindow):
         form = QFormLayout(widget)
 
         chk_enable = QCheckBox("このタイトルを表示する")
+        chk_enable.toggled.connect(lambda: self._on_title_setting_changed())
+
         txt_text = QLineEdit()
-        txt_text.textChanged.connect(lambda: self._update_preview())
+        txt_text.textChanged.connect(lambda: self._on_title_setting_changed())
+
+        # Font Family selection
+        combo_font = QComboBox()
+        font_files = FontService.scan_available_font_files()
+        font_families = [
+            "Hiragino Sans",
+            "Hiragino Kaku Gothic ProN",
+            "Hiragino Maru Gothic ProN",
+            "Hiragino Mincho ProN",
+            "Yu Gothic",
+            "Noto Sans CJK JP",
+            "Noto Sans JP",
+        ]
+        # Add found font files
+        for f_stem in font_files.keys():
+            if f_stem not in font_families:
+                font_families.append(f_stem)
+
+        combo_font.addItems(font_families)
+        combo_font.currentIndexChanged.connect(lambda: self._on_title_setting_changed())
 
         combo_align_h = QComboBox()
         combo_align_h.addItems(["中央", "左", "右", "カスタム"])
-        combo_align_h.currentIndexChanged.connect(lambda: self._update_preview())
 
         combo_align_v = QComboBox()
         combo_align_v.addItems(["上", "中央", "下", "カスタム"])
@@ -344,20 +365,38 @@ class MainWindow(QMainWindow):
             combo_align_v.setCurrentText("中央")
         else:
             combo_align_v.setCurrentText("下")
-        combo_align_v.currentIndexChanged.connect(lambda: self._update_preview())
 
         spin_x = QSpinBox()
         spin_x.setRange(0, 1280)
-        spin_x.valueChanged.connect(lambda: self._update_preview())
+        spin_x.setValue(50 if index == 1 else 0)
 
         spin_y = QSpinBox()
         spin_y.setRange(0, 720)
-        spin_y.valueChanged.connect(lambda: self._update_preview())
+        spin_y.setValue(60 if index == 1 else (360 if index == 2 else 600))
+
+        # Auto-switch align to 'カスタム' when X or Y spinbox is user-modified
+        def on_x_changed(val):
+            combo_align_h.blockSignals(True)
+            combo_align_h.setCurrentText("カスタム")
+            combo_align_h.blockSignals(False)
+            self._on_title_setting_changed()
+
+        def on_y_changed(val):
+            combo_align_v.blockSignals(True)
+            combo_align_v.setCurrentText("カスタム")
+            combo_align_v.blockSignals(False)
+            self._on_title_setting_changed()
+
+        spin_x.valueChanged.connect(on_x_changed)
+        spin_y.valueChanged.connect(on_y_changed)
+
+        combo_align_h.currentIndexChanged.connect(lambda: self._on_title_setting_changed())
+        combo_align_v.currentIndexChanged.connect(lambda: self._on_title_setting_changed())
 
         spin_size = QSpinBox()
         spin_size.setRange(10, 200)
         spin_size.setValue(48 if index == 1 else (42 if index == 2 else 32))
-        spin_size.valueChanged.connect(lambda: self._update_preview())
+        spin_size.valueChanged.connect(lambda: self._on_title_setting_changed())
 
         # Colors
         btn_color = QPushButton("文字色...")
@@ -373,22 +412,26 @@ class MainWindow(QMainWindow):
         spin_border_width = QSpinBox()
         spin_border_width.setRange(0, 20)
         spin_border_width.setValue(2)
+        spin_border_width.valueChanged.connect(lambda: self._on_title_setting_changed())
 
         # Time range
         spin_start = QDoubleSpinBox()
         spin_start.setRange(0.0, 86400.0)
         spin_start.setValue(0.0)
+        spin_start.valueChanged.connect(lambda: self._on_title_setting_changed())
 
         spin_end = QDoubleSpinBox()
         spin_end.setRange(0.0, 86400.0)
         spin_end.setValue(12.0)
+        spin_end.valueChanged.connect(lambda: self._on_title_setting_changed())
 
         form.addRow(chk_enable)
         form.addRow("テキスト:", txt_text)
+        form.addRow("フォント:", combo_font)
         form.addRow("横位置:", combo_align_h)
         form.addRow("縦位置:", combo_align_v)
-        form.addRow("カスタム X:", spin_x)
-        form.addRow("カスタム Y:", spin_y)
+        form.addRow("カスタム X (px):", spin_x)
+        form.addRow("カスタム Y (px):", spin_y)
         form.addRow("フォントサイズ:", spin_size)
 
         h_col = QHBoxLayout()
@@ -407,6 +450,7 @@ class MainWindow(QMainWindow):
         ctrls = {
             "chk_enable": chk_enable,
             "txt_text": txt_text,
+            "combo_font": combo_font,
             "combo_align_h": combo_align_h,
             "combo_align_v": combo_align_v,
             "spin_x": spin_x,
@@ -577,14 +621,81 @@ class MainWindow(QMainWindow):
             self._log_message(f"❌ 動画読み込みエラー: {e}")
             QMessageBox.critical(self, "エラー", f"動画情報を取得できませんでした:\n{e}")
 
+    def _on_title_setting_changed(self):
+        t_group = self._collect_title_settings()
+        self._update_preview()
+
     def _update_preview(self):
         t_group = self._collect_title_settings()
         pixmap = self.preview_service.generate_preview_pixmap(self.base_frame_path, t_group)
         self.preview_widget.set_preview_pixmap(pixmap)
 
+    def _load_ui_from_settings(self):
+        self.spin_thresh.setValue(self.app_settings.get("silence_threshold_db", -30.0))
+        self.spin_min_dur.setValue(self.app_settings.get("silence_min_duration", 3.0))
+        self.spin_padding.setValue(self.app_settings.get("silence_padding", 0.2))
+
+        # Title settings from app_settings
+        for idx in range(1, 4):
+            t_key = f"title{idx}"
+            if t_key in self.app_settings:
+                d = self.app_settings[t_key]
+                ctrls = self.title_controls[idx - 1]
+
+                ctrls["chk_enable"].blockSignals(True)
+                ctrls["txt_text"].blockSignals(True)
+                ctrls["combo_font"].blockSignals(True)
+                ctrls["combo_align_h"].blockSignals(True)
+                ctrls["combo_align_v"].blockSignals(True)
+                ctrls["spin_x"].blockSignals(True)
+                ctrls["spin_y"].blockSignals(True)
+                ctrls["spin_size"].blockSignals(True)
+
+                ctrls["chk_enable"].setChecked(d.get("enabled", True))
+                ctrls["txt_text"].setText(d.get("text", f"タイトル{idx}"))
+
+                # Restore font
+                font_fam = d.get("font_family", "Hiragino Sans")
+                idx_f = ctrls["combo_font"].findText(font_fam)
+                if idx_f >= 0:
+                    ctrls["combo_font"].setCurrentIndex(idx_f)
+
+                # Restore position presets & custom coords
+                align_h = d.get("align_h", "中央")
+                align_v = d.get("align_v", "中央上部" if idx == 1 else ("中央" if idx == 2 else "中央下部"))
+                idx_h = ctrls["combo_align_h"].findText(align_h)
+                if idx_h >= 0:
+                    ctrls["combo_align_h"].setCurrentIndex(idx_h)
+
+                idx_v = ctrls["combo_align_v"].findText(align_v)
+                if idx_v >= 0:
+                    ctrls["combo_align_v"].setCurrentIndex(idx_v)
+
+                ctrls["spin_x"].setValue(d.get("x", 0))
+                ctrls["spin_y"].setValue(d.get("y", 0))
+                ctrls["spin_size"].setValue(d.get("font_size", 48 if idx == 1 else (42 if idx == 2 else 32)))
+
+                # Restore colors
+                f_color = d.get("font_color", "#FFFFFF")
+                ctrls["btn_color"].setProperty("hex_color", f_color)
+                ctrls["btn_color"].setStyleSheet(f"background-color: {f_color}; color: {'#000000' if QColor(f_color).lightness() > 128 else '#FFFFFF'};")
+
+                b_color = d.get("border_color", "#000000")
+                ctrls["btn_border_color"].setProperty("hex_color", b_color)
+                ctrls["btn_border_color"].setStyleSheet(f"background-color: {b_color}; color: {'#000000' if QColor(b_color).lightness() > 128 else '#FFFFFF'};")
+
+                ctrls["chk_enable"].blockSignals(False)
+                ctrls["txt_text"].blockSignals(False)
+                ctrls["combo_font"].blockSignals(False)
+                ctrls["combo_align_h"].blockSignals(False)
+                ctrls["combo_align_v"].blockSignals(False)
+                ctrls["spin_x"].blockSignals(False)
+                ctrls["spin_y"].blockSignals(False)
+                ctrls["spin_size"].blockSignals(False)
+
     def _collect_title_settings(self) -> TitleSettingsGroup:
         titles = []
-        for ctrls in self.title_controls:
+        for idx, ctrls in enumerate(self.title_controls, start=1):
             st = SingleTitleSettings(
                 enabled=ctrls["chk_enable"].isChecked(),
                 text=ctrls["txt_text"].text(),
@@ -592,6 +703,7 @@ class MainWindow(QMainWindow):
                 align_v=ctrls["combo_align_v"].currentText(),
                 x=ctrls["spin_x"].value(),
                 y=ctrls["spin_y"].value(),
+                font_family=ctrls["combo_font"].currentText(),
                 font_size=ctrls["spin_size"].value(),
                 font_color=ctrls["btn_color"].property("hex_color") or "#FFFFFF",
                 border_color=ctrls["btn_border_color"].property("hex_color") or "#000000",
@@ -600,6 +712,27 @@ class MainWindow(QMainWindow):
                 end_time=ctrls["spin_end"].value()
             )
             titles.append(st)
+
+            # Update app_settings dictionary for persistent storage
+            t_key = f"title{idx}"
+            self.app_settings[t_key] = {
+                "enabled": st.enabled,
+                "text": st.text,
+                "align_h": st.align_h,
+                "align_v": st.align_v,
+                "x": st.x,
+                "y": st.y,
+                "font_family": st.font_family,
+                "font_size": st.font_size,
+                "font_color": st.font_color,
+                "border_color": st.border_color,
+                "border_width": st.border_width,
+                "start_time": st.start_time,
+                "end_time": st.end_time,
+            }
+
+        # Auto save settings
+        self.settings_service.save_settings(self.app_settings)
         return TitleSettingsGroup(title1=titles[0], title2=titles[1], title3=titles[2])
 
     def _collect_silence_settings() -> SilenceSettings:

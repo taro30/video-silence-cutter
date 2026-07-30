@@ -72,7 +72,8 @@ class PreviewService:
         w: int,
         h: int
     ):
-        font = QFont(setting.font_family, setting.font_size)
+        font_family = setting.font_family or "Hiragino Sans"
+        font = QFont(font_family, setting.font_size)
         font.setPixelSize(setting.font_size)
         painter.setFont(font)
 
@@ -88,7 +89,7 @@ class PreviewService:
             x = w - text_w - 50
         elif setting.align_h == "中央":
             x = (w - text_w) // 2
-        else:
+        else:  # カスタム
             x = setting.x
 
         # Determine Y
@@ -98,7 +99,7 @@ class PreviewService:
             y = h - text_h - 60
         elif setting.align_v == "中央":
             y = (h - text_h) // 2
-        else:
+        else:  # カスタム
             y = setting.y
 
         # Draw Background Box if alpha > 0
