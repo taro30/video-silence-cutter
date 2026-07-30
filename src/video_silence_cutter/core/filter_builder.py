@@ -67,8 +67,8 @@ class FilterBuilder:
         scaled_out = "vscaled"
         scale_pad_chain = (
             f"[{v_concat_out}]scale={output_width}:{output_height}:force_original_aspect_ratio=decrease,"
-            f"pad={output_width}:{output_height}:(ow-iw)/2:(oh-ih)/2:black,"
-            f"setsar=1,fps={fps_fraction},format=yuv420p[{scaled_out}];"
+            f"pad={output_width}:{output_height}:(1280-iw)/2:(720-ih)/2:black,"
+            f"setsar=1,fps=30,format=yuv420p[{scaled_out}];"
         )
         lines.append(scale_pad_chain)
 

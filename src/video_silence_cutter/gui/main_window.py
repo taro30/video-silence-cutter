@@ -264,39 +264,69 @@ class MainWindow(QMainWindow):
         right_layout.addWidget(self.preview_widget, 1)
 
         # Player & Timeline Seek Bar Layout Directly Under Preview Canvas
-        player_box = QGroupBox("動画タイムライン・再生コントロール", right_widget)
+        player_box = QGroupBox("🎬 動画タイムライン・再生コントロール", right_widget)
+        player_box.setMinimumHeight(80)
         player_layout = QVBoxLayout(player_box)
-        player_layout.setContentsMargins(8, 8, 8, 8)
+        player_layout.setContentsMargins(10, 10, 10, 10)
 
         # Timeline Slider Line
         h_time_line = QHBoxLayout()
 
         self.btn_play_preview = QPushButton("▶ 再生")
-        self.btn_play_preview.setFixedWidth(80)
-        self.btn_play_preview.setStyleSheet("font-weight: bold; background-color: #007ACC; color: white; padding: 4px 8px;")
+        self.btn_play_preview.setFixedWidth(90)
+        self.btn_play_preview.setStyleSheet(
+            "QPushButton { font-weight: bold; background-color: #2e7d32; color: white; padding: 6px; border-radius: 4px; } "
+            "QPushButton:hover { background-color: #388e3c; }"
+        )
         self.btn_play_preview.setEnabled(False)
         self.btn_play_preview.clicked.connect(self._toggle_preview_play)
         h_time_line.addWidget(self.btn_play_preview)
 
         self.btn_stop_preview = QPushButton("⏹ 停止")
-        self.btn_stop_preview.setFixedWidth(60)
+        self.btn_stop_preview.setFixedWidth(70)
+        self.btn_stop_preview.setStyleSheet("padding: 6px;")
         self.btn_stop_preview.setEnabled(False)
         self.btn_stop_preview.clicked.connect(self._stop_preview_play)
         h_time_line.addWidget(self.btn_stop_preview)
 
         self.lbl_seek_curr_time = QLabel("00:00:00")
+        self.lbl_seek_curr_time.setStyleSheet("font-weight: bold; color: #007ACC; font-size: 13px;")
         h_time_line.addWidget(self.lbl_seek_curr_time)
 
-        # High precision timeline slider bar (0 to 1000)
+        # High precision timeline slider bar with custom modern styling
         self.slider_video_timeline = QSlider(Qt.Horizontal)
         self.slider_video_timeline.setRange(0, 1000)
         self.slider_video_timeline.setValue(0)
         self.slider_video_timeline.setEnabled(False)
+        self.slider_video_timeline.setMinimumHeight(30)
+        self.slider_video_timeline.setStyleSheet("""
+            QSlider::groove:horizontal {
+                height: 8px;
+                background: #3f3f46;
+                border-radius: 4px;
+            }
+            QSlider::sub-page:horizontal {
+                background: #007ACC;
+                border-radius: 4px;
+            }
+            QSlider::handle:horizontal {
+                background: #ffffff;
+                border: 2px solid #007ACC;
+                width: 20px;
+                margin-top: -6px;
+                margin-bottom: -6px;
+                border-radius: 10px;
+            }
+            QSlider::handle:horizontal:hover {
+                background: #e0e0e0;
+            }
+        """)
         self.slider_video_timeline.sliderMoved.connect(self._on_timeline_slider_moved)
         self.slider_video_timeline.valueChanged.connect(self._on_timeline_slider_changed)
         h_time_line.addWidget(self.slider_video_timeline, 1)
 
         self.lbl_seek_total_time = QLabel("00:00:00")
+        self.lbl_seek_total_time.setStyleSheet("color: #aaaaaa; font-size: 13px;")
         h_time_line.addWidget(self.lbl_seek_total_time)
 
         h_time_line.addSpacing(10)
@@ -312,7 +342,7 @@ class MainWindow(QMainWindow):
         right_layout.addWidget(player_box)
 
         self.splitter.addWidget(right_widget)
-        self.splitter.setSizes(self.app_settings.get("splitter_sizes", [450, 990]))
+        self.splitter.setSizes(self.app_settings.get("splitter_sizes", [400, 600]))
 
         main_layout.addWidget(self.splitter, 1)
 
