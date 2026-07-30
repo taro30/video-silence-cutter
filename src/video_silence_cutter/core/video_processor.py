@@ -16,6 +16,123 @@ class VideoProcessor:
         self._process: Optional[subprocess.Popen] = None
         self._is_cancelled: bool = False
 
+    def process_concat_demuxer(
+        self,
+        concat_list_path: Path,
+        output_path: str,
+        expected_duration: float = 0.0,
+        progress_callback: Optional[Callable[[float, str, float, float], None]] = None
+    ) -> bool:
+        """
+        FFmpeg の concat demuxer を使って無再エンコード (-c copy) で高速結合する。
+        処理時間は数秒で完了し、画質劣化も一切発生しない。
+        """
+        self._is_cancelled = False
+        start_time = time.time()
+
+        out_file = Path(output_path)
+        temp_out_file = out_file.with_name(out_file.name + ".processing.mp4")
+
+        if temp_out_file.exists():
+            try:
+                temp_out_file.unlink()
+            except Exception:
+                pass
+
+        cmd = [
+            str(self.ffmpeg_path),
+            "-y",
+            "-loglevel", "warning",
+            "-progress", "pipe:1",
+            "-f", "concat",
+            "-safe", "0",
+            "-i", str(concat_list_path.resolve()),
+            "-c", "copy",
+            "-movflags", "+faststart",
+            str(temp_out_file)
+        ]
+
+        logger.info(f"Executing Stream Copy Concat: {' '.join(cmd)}")
+
+        self._process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+            start_new_session=True
+        )
+
+        stderr_lines: List[str] = []
+
+        def _read_stderr():
+            try:
+                for s_line in self._process.stderr:
+                    if s_line:
+                        stderr_lines.append(s_line)
+            except Exception:
+                pass
+
+        t_err = threading.Thread(target=_read_stderr, daemon=True)
+        t_err.start()
+
+        curr_speed = ""
+        try:
+            while True:
+                if self._is_cancelled:
+                    kill_process_group(self._process)
+                    if temp_out_file.exists():
+                        try:
+                            temp_out_file.unlink()
+                        except Exception:
+                            pass
+                    raise RuntimeError("高速カット結合処理がキャンセルされました。")
+
+                line = self._process.stdout.readline()
+                if not line and self._process.poll() is not None:
+                    break
+
+                if line:
+                    line_str = line.strip()
+                    if line_str.startswith("speed="):
+                        curr_speed = line_str.split("=")[1].strip()
+                    elif line_str.startswith("out_time_us=") and progress_callback and expected_duration > 0:
+                        try:
+                            us = float(line_str.split("=")[1])
+                            curr_sec = us / 1000000.0
+                            pct = min(99.0, (curr_sec / expected_duration) * 100.0)
+                            elapsed = time.time() - start_time
+                            eta = (elapsed / (pct / 100.0)) - elapsed if pct > 0 else 0.0
+                            speed_info = f" ({curr_speed})" if curr_speed else ""
+                            progress_callback(pct, f"高速カット結合中 ({pct:.1f}%{speed_info})", elapsed, max(0.0, eta))
+                        except Exception:
+                            pass
+
+            self._process.wait()
+            t_err.join(timeout=3.0)
+
+            if self._is_cancelled:
+                if temp_out_file.exists():
+                    temp_out_file.unlink()
+                return False
+
+            if self._process.returncode != 0:
+                full_stderr = "".join(stderr_lines)
+                logger.error(f"Stream Copy Concat failed:\n{full_stderr}")
+                if temp_out_file.exists():
+                    temp_out_file.unlink()
+                raise RuntimeError(f"高速結合エラー:\n{full_stderr[-300:]}")
+
+            if temp_out_file.exists():
+                temp_out_file.replace(out_file)
+                logger.info(f"Stream Copy Concat completed successfully -> {out_file}")
+                return True
+            else:
+                raise RuntimeError("出力一時ファイルが見つかりません。")
+
+        finally:
+            self._process = None
+
     def process_video(
         self,
         input_path: str,

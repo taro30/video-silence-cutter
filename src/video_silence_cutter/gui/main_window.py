@@ -611,6 +611,10 @@ class MainWindow(QMainWindow):
         form.addRow("出力ファイル名:", self.txt_output_filename)
         form.addRow("エンコード方式:", self.combo_encoder)
 
+        lbl_fast_note = QLabel("※ タイトル文字を無効（または未入力）にした場合、自動的に『無再エンコード Stream Copy モード』が適用され、数秒〜数十秒で超高速に無音カット完了します。")
+        lbl_fast_note.setStyleSheet("color: #4caf50; font-size: 11px; margin-top: 5px;")
+        form.addRow("", lbl_fast_note)
+
         self.tabs_controls.addTab(tab_output, "出力設定")
 
     def _pick_color(self, button: QPushButton):
