@@ -8,7 +8,6 @@ from ..models.silence_interval import SilenceInterval
 from ..models.silence_settings import SilenceSettings
 from ..core.silence_parser import SilenceParser
 from ..utils.process_utils import kill_process_group
-from ..utils.time_utils import hms_to_seconds
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +30,7 @@ class SilenceDetector:
         cmd = [
             str(self.ffmpeg_path),
             "-y",
+            "-progress", "pipe:1",
             "-i", input_path,
             "-af", af_filter,
             "-f", "null",
@@ -51,31 +51,33 @@ class SilenceDetector:
         stderr_lines: List[str] = []
 
         try:
+            # Continuously read stdout for progress and stderr for silence logs
             while True:
                 if self._is_cancelled:
                     kill_process_group(self._process)
-                    raise RuntimeError("無音検出処理がキャンセルされました。")
+                    raise RuntimeError("無音区間の解析処理がキャンセルされました。")
 
-                line = self._process.stderr.readline()
+                line = self._process.stdout.readline()
                 if not line and self._process.poll() is not None:
                     break
 
                 if line:
-                    stderr_lines.append(line)
-                    # Attempt to parse time from stderr for progress
-                    if "time=" in line and progress_callback and video_duration > 0:
+                    line_str = line.strip()
+                    if line_str.startswith("out_time_us=") and progress_callback and video_duration > 0:
                         try:
-                            # Parse time=HH:MM:SS.ms or time=HH:MM:SS
-                            match = re.search(r"time=\s*(\d{2}:\d{2}:\d{2}\.\d+|\d{2}:\d{2}:\d{2})", line)
-                            if match:
-                                time_str = match.group(1)
-                                curr_sec = hms_to_seconds(time_str)
-                                pct = min(99.0, (curr_sec / video_duration) * 100.0)
-                                progress_callback(pct, f"無音区間を解析中 ({pct:.1f}%)")
+                            us = float(line_str.split("=")[1])
+                            curr_sec = us / 1000000.0
+                            pct = min(99.0, (curr_sec / video_duration) * 100.0)
+                            progress_callback(pct, f"無音区間を解析中 ({pct:.1f}%)")
                         except Exception:
                             pass
 
             self._process.wait()
+
+            # Read remaining stderr
+            stderr_rest = self._process.stderr.read()
+            stderr_lines.append(stderr_rest)
+
             if self._process.returncode != 0 and not self._is_cancelled:
                 logger.warning(f"FFmpeg silencedetect exited with code {self._process.returncode}")
 

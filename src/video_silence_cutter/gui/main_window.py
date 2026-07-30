@@ -31,6 +31,7 @@ from .preview_widget import PreviewWidget
 from .interval_table import IntervalTableDialog
 from .completion_dialog import CompletionDialog
 from .settings_dialog import SettingsDialog
+from .video_player_dialog import VideoPlayerDialog
 from .worker import SilenceAnalysisWorker, VideoProcessWorker
 
 logger = logging.getLogger(__name__)
@@ -622,7 +623,8 @@ class MainWindow(QMainWindow):
     def _play_input_video(self):
         input_path = self.txt_input_path.text().strip()
         if input_path and Path(input_path).is_file():
-            subprocess.run(["open", input_path], check=False)
+            dlg = VideoPlayerDialog(input_path, title=f"元動画の再生確認 - {Path(input_path).name}", parent=self)
+            dlg.exec()
 
     def _on_preview_sec_changed(self, sec: float):
         self._capture_preview_frame_at_sec()

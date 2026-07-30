@@ -4,6 +4,7 @@ from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushBu
 from PySide6.QtCore import Qt
 from ..models.process_result import ProcessResult
 from ..utils.time_utils import seconds_to_hms
+from .video_player_dialog import VideoPlayerDialog
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +47,7 @@ class CompletionDialog(QDialog):
         # Buttons
         btn_layout = QHBoxLayout()
 
-        btn_open_video = QPushButton("▶ 動画を開く")
+        btn_open_video = QPushButton("▶ 完成動画を再生確認")
         btn_open_video.clicked.connect(self._open_video)
         btn_layout.addWidget(btn_open_video)
 
@@ -65,9 +66,10 @@ class CompletionDialog(QDialog):
 
     def _open_video(self):
         try:
-            subprocess.run(["open", self.result.output_file], check=False)
+            dlg = VideoPlayerDialog(self.result.output_file, title=f"完成動画の再生確認 - {self.result.output_file}", parent=self)
+            dlg.exec()
         except Exception as e:
-            logger.error(f"Failed to open video: {e}")
+            logger.error(f"Failed to play output video: {e}")
 
     def _show_in_finder(self):
         try:
