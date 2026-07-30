@@ -161,20 +161,32 @@ class VideoProcessor:
             if self._process.returncode != 0:
                 full_stderr = "".join(stderr_lines)
                 logger.error(f"FFmpeg encoding failed (exit {self._process.returncode}):\n{full_stderr}")
+
+                # デバッグ用にログファイルへ完全な stderr を出力
+                try:
+                    import tempfile as _tf, datetime as _dt
+                    log_dir = Path(_tf.gettempdir()) / "vsc_ffmpeg_logs"
+                    log_dir.mkdir(exist_ok=True)
+                    ts = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+                    log_file = log_dir / f"ffmpeg_error_{ts}.log"
+                    log_file.write_text(f"CMD:\n{' '.join(cmd)}\n\nSTDERR:\n{full_stderr}", encoding="utf-8")
+                    logger.error(f"Full FFmpeg error log written to: {log_file}")
+                except Exception:
+                    pass
+
                 if temp_out_file.exists():
                     temp_out_file.unlink()
 
-                # バージョンヘッダーを除外して実際のエラー原因のみ抽出
+                # バージョンヘッダーを除外（先頭スペースも考慮して strip() してから比較）
+                skip_prefixes = (
+                    "ffmpeg version", "built with", "(clang-",
+                    "configuration:", "libav", "  lib", "Copyright",
+                )
                 clean_lines = [
                     l.strip() for l in full_stderr.splitlines()
-                    if l.strip()
-                    and not l.startswith("ffmpeg version")
-                    and not l.startswith("built with")
-                    and not l.startswith("configuration:")
-                    and not l.startswith("libav")
-                    and not l.startswith("  lib")
+                    if l.strip() and not any(l.strip().startswith(p) for p in skip_prefixes)
                 ]
-                err_msg = "\n".join(clean_lines[-8:]) if clean_lines else full_stderr[-400:]
+                err_msg = "\n".join(clean_lines[-10:]) if clean_lines else full_stderr[-400:]
                 raise RuntimeError(f"FFmpegエンコードエラー:\n{err_msg}")
 
             # アトミックリネームで最終出力へ
