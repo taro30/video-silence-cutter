@@ -12,7 +12,7 @@ def test_build_filter_script_with_audio_and_titles(tmp_path):
         title3=SingleTitleSettings(enabled=False, text="")
     )
 
-    script_path, v_out, a_out = FilterBuilder.build_filter_script(
+    script_path, v_out, a_out, img_paths = FilterBuilder.build_filter_script(
         keep_intervals=keeps,
         has_audio=True,
         title_settings=title_grp,
@@ -27,13 +27,17 @@ def test_build_filter_script_with_audio_and_titles(tmp_path):
     assert "concat=n=2:v=1:a=1" in content
     assert "scale=1280:720" in content
     assert "pad=1280:720" in content
-    assert "drawtext=" in content
+    # overlay 方式を使用 (drawtext は使わない)
+    assert "overlay=" in content
     assert a_out == "aconcat"
     assert v_out.startswith("vtitle")
+    # title PNG が生成されているか確認
+    assert len(img_paths) == 1
+    assert img_paths[0].exists()
 
 def test_build_filter_script_no_audio(tmp_path):
     keeps = [KeepInterval(0.0, 10.0)]
-    script_path, v_out, a_out = FilterBuilder.build_filter_script(
+    script_path, v_out, a_out, img_paths = FilterBuilder.build_filter_script(
         keep_intervals=keeps,
         has_audio=False,
         title_settings=None,
@@ -43,3 +47,4 @@ def test_build_filter_script_no_audio(tmp_path):
     content = script_path.read_text(encoding="utf-8")
     assert "concat=n=1:v=1:a=0" in content
     assert a_out == ""
+    assert img_paths == []

@@ -107,7 +107,7 @@ class ProcessService:
         temp_dir = Path(temp_dir_obj.name)
 
         try:
-            script_path, v_label, a_label = FilterBuilder.build_filter_script(
+            script_path, v_label, a_label, title_image_paths = FilterBuilder.build_filter_script(
                 keep_intervals=keeps,
                 has_audio=v_info.has_audio,
                 title_settings=title_settings,
@@ -131,7 +131,8 @@ class ProcessService:
                 a_label=a_label,
                 settings=output_settings,
                 expected_duration=expected_output_duration,
-                progress_callback=enc_cb
+                progress_callback=enc_cb,
+                title_image_paths=title_image_paths
             )
 
             # Step 5: Output validation

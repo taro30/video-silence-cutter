@@ -1,8 +1,16 @@
+"""
+FilterBuilder: FFmpeg filter_complex スクリプトを生成する。
+
+タイトル合成は drawtext（libfreetype が必要）ではなく、
+Pillow で生成した透過PNG画像を overlay フィルターで重ねる方式を使用する。
+"""
 from pathlib import Path
 from typing import List, Optional, Tuple
+
 from ..models.keep_interval import KeepInterval
 from ..models.title_settings import TitleSettingsGroup
 from .title_renderer import TitleRenderer
+
 
 class FilterBuilder:
     @staticmethod
@@ -14,15 +22,19 @@ class FilterBuilder:
         output_width: int = 1280,
         output_height: int = 720,
         fps_fraction: str = "30000/1001"
-    ) -> Tuple[Path, str, str]:
+    ) -> Tuple[Path, str, str, List[Path]]:
         """
-        Builds filter_complex_script file.
-        Returns (script_file_path, video_out_label, audio_out_label_or_empty)
+        filter_complex スクリプトファイルを生成する。
+
+        Returns:
+            (script_file_path, video_out_label, audio_out_label_or_empty, title_image_paths)
+
+        title_image_paths は overlay 用に追加の -i オプションで渡す必要があるファイルリスト。
         """
         lines: List[str] = []
+        title_image_paths: List[Path] = []
 
         if not keep_intervals:
-            # Fallback: keep full video if intervals empty
             keep_intervals = [KeepInterval(0.0, 0.0)]
 
         num_intervals = len(keep_intervals)
@@ -45,10 +57,7 @@ class FilterBuilder:
             trim_filter = f"trim={':'.join(trim_opts)}," if trim_opts else ""
             atrim_filter = f"atrim={':'.join(trim_opts)}," if trim_opts else ""
 
-            # Video trim
             lines.append(f"[0:v]{trim_filter}setpts=PTS-STARTPTS[{v_label}];")
-
-            # Audio trim (if audio exists)
             if has_audio:
                 lines.append(f"[0:a]{atrim_filter}asetpts=PTS-STARTPTS[{a_label}];")
 
@@ -63,32 +72,48 @@ class FilterBuilder:
             concat_inputs = "".join(v_labels)
             lines.append(f"{concat_inputs}concat=n={num_intervals}:v=1:a=0[{v_concat_out}];")
 
-        # Scale, Pad, SAR, FPS, Format step
+        # Scale + Pad + SAR + FPS + Format
         scaled_out = "vscaled"
-        scale_pad_chain = (
+        lines.append(
             f"[{v_concat_out}]scale={output_width}:{output_height}:force_original_aspect_ratio=decrease,"
-            f"pad={output_width}:{output_height}:(1280-iw)/2:(720-ih)/2:black,"
+            f"pad={output_width}:{output_height}:(ow-iw)/2:(oh-ih)/2:black,"
             f"setsar=1,fps=30,format=yuv420p[{scaled_out}];"
         )
-        lines.append(scale_pad_chain)
 
         current_v = scaled_out
 
-        # Title drawtext filters
+        # Title overlay via Pillow PNG images
+        # 入力インデックスは [0] が元動画、[1]以降がタイトル画像
+        overlay_input_idx = 1
+
         if title_settings:
             titles = [title_settings.title1, title_settings.title2, title_settings.title3]
             for idx, t_setting in enumerate(titles, start=1):
-                if t_setting.enabled and t_setting.text.strip():
-                    txt_file = TitleRenderer.write_title_text_file(t_setting.text, temp_dir, idx)
-                    dt_filter = TitleRenderer.build_drawtext_filter(
-                        t_setting, txt_file, output_width, output_height
-                    )
-                    if dt_filter:
-                        next_v = f"vtitle{idx}"
-                        lines.append(f"[{current_v}]{dt_filter}[{next_v}];")
-                        current_v = next_v
+                if not t_setting.enabled or not t_setting.text.strip():
+                    continue
 
-        # Final label cleanup: remove trailing semicolon from last filter line
+                img_path = temp_dir / f"title_{idx}.png"
+                rendered = TitleRenderer.render_title_image(
+                    t_setting, img_path, output_width, output_height
+                )
+                if rendered is None:
+                    continue
+
+                title_image_paths.append(img_path)
+                next_v = f"vtitle{idx}"
+
+                # enable パラメータで表示時間を制御
+                enable_expr = ""
+                if t_setting.start_time >= 0 and t_setting.end_time > t_setting.start_time:
+                    enable_expr = f":enable='between(t,{t_setting.start_time},{t_setting.end_time})'"
+
+                lines.append(
+                    f"[{current_v}][{overlay_input_idx}:v]overlay=0:0{enable_expr}[{next_v}];"
+                )
+                current_v = next_v
+                overlay_input_idx += 1
+
+        # 末尾のセミコロンを除去
         if lines and lines[-1].endswith(";"):
             lines[-1] = lines[-1][:-1]
 
@@ -97,4 +122,4 @@ class FilterBuilder:
         script_path = temp_dir / "filter_complex_script.txt"
         script_path.write_text(script_content, encoding="utf-8")
 
-        return script_path, current_v, a_concat_out
+        return script_path, current_v, a_concat_out, title_image_paths

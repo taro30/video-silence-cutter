@@ -1,9 +1,10 @@
 import os
 import time
 import subprocess
+import threading
 import logging
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, List, Optional
 from ..models.output_settings import OutputSettings
 from ..utils.process_utils import kill_process_group
 
@@ -24,7 +25,8 @@ class VideoProcessor:
         a_label: str,
         settings: OutputSettings,
         expected_duration: float,
-        progress_callback: Optional[Callable[[float, str, float, float], None]] = None
+        progress_callback: Optional[Callable[[float, str, float, float], None]] = None,
+        title_image_paths: Optional[List[Path]] = None
     ) -> bool:
         self._is_cancelled = False
         start_time = time.time()
@@ -38,15 +40,27 @@ class VideoProcessor:
             except Exception:
                 pass
 
+        # filter_complex の内容をファイルから読み込んで直接渡す
+        # (FFmpeg 8.x で -filter_complex_script が deprecated かつ @file が未対応のため)
+        filter_script_content = filter_script_path.read_text(encoding="utf-8")
+
         cmd = [
             str(self.ffmpeg_path),
             "-y",
             "-loglevel", "warning",
             "-progress", "pipe:1",
             "-i", input_path,
-            "-filter_complex_script", str(filter_script_path.resolve()),
-            "-map", f"[{v_label}]"
         ]
+
+        # タイトル画像をオーバーレイ入力として追加（タイトルがある場合）
+        if title_image_paths:
+            for img_path in title_image_paths:
+                cmd.extend(["-loop", "1", "-i", str(img_path)])
+
+        cmd.extend([
+            "-filter_complex", filter_script_content,
+            "-map", f"[{v_label}]"
+        ])
 
         if a_label:
             cmd.extend(["-map", f"[{a_label}]"])
@@ -65,6 +79,10 @@ class VideoProcessor:
             "-g", str(settings.gop),
             "-bf", str(settings.bframes),
         ])
+
+        # タイトル画像を -loop 1 で入力している場合、動画が終わり次第停止させる
+        if title_image_paths:
+            cmd.append("-shortest")
 
         if settings.faststart:
             cmd.extend(["-movflags", "+faststart"])
@@ -90,10 +108,9 @@ class VideoProcessor:
             start_new_session=True
         )
 
-        stderr_lines = []
+        stderr_lines: List[str] = []
 
-        # Read stderr in thread to prevent pipe buffer deadlock
-        import threading
+        # stderr を別スレッドで読み続けてパイプバッファのデッドロックを防ぐ
         def _read_stderr():
             try:
                 for s_line in self._process.stderr:
@@ -134,7 +151,7 @@ class VideoProcessor:
                             pass
 
             self._process.wait()
-            t_err.join(timeout=2.0)
+            t_err.join(timeout=3.0)
 
             if self._is_cancelled:
                 if temp_out_file.exists():
@@ -143,22 +160,24 @@ class VideoProcessor:
 
             if self._process.returncode != 0:
                 full_stderr = "".join(stderr_lines)
-                logger.error(f"FFmpeg encoding failed with exit code {self._process.returncode}: {full_stderr}")
+                logger.error(f"FFmpeg encoding failed (exit {self._process.returncode}):\n{full_stderr}")
                 if temp_out_file.exists():
                     temp_out_file.unlink()
 
-                # Extract real error cause lines
+                # バージョンヘッダーを除外して実際のエラー原因のみ抽出
                 clean_lines = [
                     l.strip() for l in full_stderr.splitlines()
-                    if l.strip() and not l.startswith("ffmpeg version")
+                    if l.strip()
+                    and not l.startswith("ffmpeg version")
                     and not l.startswith("built with")
                     and not l.startswith("configuration:")
                     and not l.startswith("libav")
+                    and not l.startswith("  lib")
                 ]
-                err_msg = "\n".join(clean_lines[-6:]) if clean_lines else full_stderr[-300:]
+                err_msg = "\n".join(clean_lines[-8:]) if clean_lines else full_stderr[-400:]
                 raise RuntimeError(f"FFmpegエンコードエラー:\n{err_msg}")
 
-            # Atomic rename to final output
+            # アトミックリネームで最終出力へ
             if temp_out_file.exists():
                 temp_out_file.replace(out_file)
                 logger.info(f"Encoding completed successfully -> {out_file}")
