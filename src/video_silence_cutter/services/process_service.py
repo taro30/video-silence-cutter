@@ -1,8 +1,9 @@
 import os
 import time
 import logging
+import subprocess
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, List
 
 from ..core.ffmpeg_locator import FFmpegLocator
 from ..core.ffprobe_service import FFprobeService
