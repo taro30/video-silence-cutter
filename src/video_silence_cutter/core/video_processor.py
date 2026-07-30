@@ -49,12 +49,9 @@ class VideoProcessor:
             "-y",
             "-loglevel", "warning",
             "-progress", "pipe:1",
+            "-threads", "0",
+            "-i", input_path,
         ]
-
-        if settings.encoder == "h264_videotoolbox":
-            cmd.extend(["-hwaccel", "videotoolbox"])
-
-        cmd.extend(["-i", input_path])
 
         # タイトル画像をオーバーレイ入力として追加（タイトルがある場合）
         if title_image_paths:
@@ -74,7 +71,7 @@ class VideoProcessor:
             cmd.extend([
                 "-c:v", "h264_videotoolbox",
                 "-b:v", settings.video_bitrate,
-                "-pix_fmt", settings.pix_fmt,
+                "-r", "30",
                 "-g", str(settings.gop),
                 "-allow_sw", "1",          # ソフトウェアフォールバックを許可
                 "-threads", "0",
@@ -87,6 +84,7 @@ class VideoProcessor:
                 "-b:v", settings.video_bitrate,
                 "-maxrate", settings.max_bitrate,
                 "-bufsize", settings.bufsize,
+                "-r", "30",
                 "-g", str(settings.gop),
                 "-bf", str(settings.bframes),
                 "-threads", "0",
@@ -134,6 +132,7 @@ class VideoProcessor:
         t_err = threading.Thread(target=_read_stderr, daemon=True)
         t_err.start()
 
+        curr_speed = ""
         try:
             while True:
                 if self._is_cancelled:
@@ -149,16 +148,19 @@ class VideoProcessor:
                 if not line and self._process.poll() is not None:
                     break
 
-                if line and progress_callback and expected_duration > 0:
+                if line:
                     line_str = line.strip()
-                    if line_str.startswith("out_time_us="):
+                    if line_str.startswith("speed="):
+                        curr_speed = line_str.split("=")[1].strip()
+                    elif line_str.startswith("out_time_us=") and progress_callback and expected_duration > 0:
                         try:
                             us = float(line_str.split("=")[1])
                             curr_sec = us / 1000000.0
                             pct = min(99.0, (curr_sec / expected_duration) * 100.0)
                             elapsed = time.time() - start_time
                             eta = (elapsed / (pct / 100.0)) - elapsed if pct > 0 else 0.0
-                            progress_callback(pct, f"動画を編集・エンコード中 ({pct:.1f}%)", elapsed, max(0.0, eta))
+                            speed_info = f" ({curr_speed})" if curr_speed else ""
+                            progress_callback(pct, f"動画を編集・エンコード中 ({pct:.1f}%{speed_info})", elapsed, max(0.0, eta))
                         except Exception:
                             pass
 

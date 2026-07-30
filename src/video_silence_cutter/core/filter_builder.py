@@ -75,12 +75,12 @@ class FilterBuilder:
             concat_inputs = "".join(v_labels)
             lines.append(f"{concat_inputs}concat=n={num_intervals}:v=1:a=0[{v_concat_out}];")
 
-        # Scale + Pad + SAR + FPS + Format
+        # Scale + Pad + SAR + Format (fps=30 は出力側オプションで制御)
         scaled_out = "vscaled"
         lines.append(
             f"[{v_concat_out}]scale={output_width}:{output_height}:force_original_aspect_ratio=decrease,"
             f"pad={output_width}:{output_height}:(ow-iw)/2:(oh-ih)/2:black,"
-            f"setsar=1,fps=30,format=yuv420p[{scaled_out}];"
+            f"setsar=1,format=yuv420p[{scaled_out}];"
         )
 
         current_v = scaled_out
