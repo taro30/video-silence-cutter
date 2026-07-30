@@ -49,8 +49,12 @@ class VideoProcessor:
             "-y",
             "-loglevel", "warning",
             "-progress", "pipe:1",
-            "-i", input_path,
         ]
+
+        if settings.encoder == "h264_videotoolbox":
+            cmd.extend(["-hwaccel", "videotoolbox"])
+
+        cmd.extend(["-i", input_path])
 
         # タイトル画像をオーバーレイ入力として追加（タイトルがある場合）
         if title_image_paths:
@@ -73,17 +77,19 @@ class VideoProcessor:
                 "-pix_fmt", settings.pix_fmt,
                 "-g", str(settings.gop),
                 "-allow_sw", "1",          # ソフトウェアフォールバックを許可
+                "-threads", "0",
             ])
         else:
             cmd.extend([
                 "-c:v", "libx264",
-                "-preset", "fast",         # エンコード速度優先
+                "-preset", "veryfast",     # 速度優先プリセット
                 "-pix_fmt", settings.pix_fmt,
                 "-b:v", settings.video_bitrate,
                 "-maxrate", settings.max_bitrate,
                 "-bufsize", settings.bufsize,
                 "-g", str(settings.gop),
                 "-bf", str(settings.bframes),
+                "-threads", "0",
             ])
 
         # タイトル画像を -loop 1 で入力している場合、動画が終わり次第停止させる

@@ -604,8 +604,8 @@ class MainWindow(QMainWindow):
         self.txt_output_filename = QLineEdit()
 
         self.combo_encoder = QComboBox()
-        self.combo_encoder.addItem("互換性優先 (libx264)", "libx264")
-        self.combo_encoder.addItem("高速処理 (h264_videotoolbox)", "h264_videotoolbox")
+        self.combo_encoder.addItem("高速処理 (h264_videotoolbox) [推奨・ハードウェア加速]", "h264_videotoolbox")
+        self.combo_encoder.addItem("互換性優先 (libx264) [CPU低速]", "libx264")
 
         form.addRow("出力フォルダ:", h_dir)
         form.addRow("出力ファイル名:", self.txt_output_filename)
