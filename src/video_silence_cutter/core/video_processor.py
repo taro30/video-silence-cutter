@@ -41,6 +41,7 @@ class VideoProcessor:
         cmd = [
             str(self.ffmpeg_path),
             "-y",
+            "-loglevel", "warning",
             "-progress", "pipe:1",
             "-i", input_path,
             "-filter_complex_script", str(filter_script_path.resolve()),
@@ -89,6 +90,21 @@ class VideoProcessor:
             start_new_session=True
         )
 
+        stderr_lines = []
+
+        # Read stderr in thread to prevent pipe buffer deadlock
+        import threading
+        def _read_stderr():
+            try:
+                for s_line in self._process.stderr:
+                    if s_line:
+                        stderr_lines.append(s_line)
+            except Exception:
+                pass
+
+        t_err = threading.Thread(target=_read_stderr, daemon=True)
+        t_err.start()
+
         try:
             while True:
                 if self._is_cancelled:
@@ -118,6 +134,7 @@ class VideoProcessor:
                             pass
 
             self._process.wait()
+            t_err.join(timeout=2.0)
 
             if self._is_cancelled:
                 if temp_out_file.exists():
@@ -125,21 +142,21 @@ class VideoProcessor:
                 return False
 
             if self._process.returncode != 0:
-                stderr_err = self._process.stderr.read()
-                logger.error(f"FFmpeg encoding failed with exit code {self._process.returncode}: {stderr_err}")
+                full_stderr = "".join(stderr_lines)
+                logger.error(f"FFmpeg encoding failed with exit code {self._process.returncode}: {full_stderr}")
                 if temp_out_file.exists():
                     temp_out_file.unlink()
 
-                # Extract real error message lines (filter out ffmpeg header/configuration output)
-                err_lines = [
-                    line.strip() for line in stderr_err.splitlines()
-                    if line.strip() and not line.startswith("ffmpeg version")
-                    and not line.startswith("built with")
-                    and not line.startswith("configuration:")
-                    and not line.startswith("libav")
+                # Extract real error cause lines
+                clean_lines = [
+                    l.strip() for l in full_stderr.splitlines()
+                    if l.strip() and not l.startswith("ffmpeg version")
+                    and not l.startswith("built with")
+                    and not l.startswith("configuration:")
+                    and not l.startswith("libav")
                 ]
-                meaningful_msg = "\n".join(err_lines[-8:]) if err_lines else stderr_err[-300:]
-                raise RuntimeError(f"FFmpegエラー:\n{meaningful_msg}")
+                err_msg = "\n".join(clean_lines[-6:]) if clean_lines else full_stderr[-300:]
+                raise RuntimeError(f"FFmpegエンコードエラー:\n{err_msg}")
 
             # Atomic rename to final output
             if temp_out_file.exists():
