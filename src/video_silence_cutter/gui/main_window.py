@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
     QFormLayout, QColorDialog, QApplication, QSlider
 )
 from PySide6.QtGui import QAction, QKeySequence, QPixmap, QColor, QPainter, QBrush, QPen
-from PySide6.QtCore import Qt, QTimer, QSize
+from PySide6.QtCore import Qt, QTimer, QSize, Signal
 
 from ..core.ffmpeg_locator import FFmpegLocator
 from ..models.video_info import VideoInfo
@@ -38,19 +38,42 @@ logger = logging.getLogger(__name__)
 
 class TrimmingSlider(QSlider):
     """
-    トリミング開始点・終了点をスライダーバー上に視覚的にマーカー表示＆ハイライト表示するカスタムスライダー
+    トリミング開始点・終了点をスライダーバー上に視覚的にマーカー表示＆ハイライト表示し、
+    Ctrl+ホイール等でのズーム拡大縮小にも対応したカスタムスライダー
     """
+    zoom_changed_signal = Signal(float)
+
     def __init__(self, parent=None):
         super().__init__(Qt.Horizontal, parent)
         self.start_sec = 0.0
         self.end_sec = 0.0
         self.duration_sec = 0.0
+        self.zoom_factor = 1.0  # 1.0x 〜 10.0x
+        self.view_start_pct = 0.0  # 表示ウィンドウの開始位置 (0.0 ~ 1.0)
 
     def set_trim_range(self, start_sec: float, end_sec: float, duration_sec: float):
         self.start_sec = start_sec
         self.end_sec = end_sec
         self.duration_sec = duration_sec
         self.update()
+
+    def set_zoom_factor(self, factor: float):
+        self.zoom_factor = max(1.0, min(10.0, factor))
+        self.update()
+
+    def wheelEvent(self, event):
+        # マウスホイールでズーム拡大・縮小
+        delta = event.angleDelta().y()
+        if delta != 0:
+            step = 1.2 if delta > 0 else 0.8
+            new_zoom = max(1.0, min(10.0, self.zoom_factor * step))
+            if new_zoom != self.zoom_factor:
+                self.zoom_factor = new_zoom
+                self.zoom_changed_signal.emit(self.zoom_factor)
+                self.update()
+                event.accept()
+                return
+        super().wheelEvent(event)
 
     def paintEvent(self, event):
         super().paintEvent(event)
@@ -75,6 +98,7 @@ class TrimmingSlider(QSlider):
         if not (has_start or has_end):
             return
 
+        # ズームに応じたパーセンテージ計算
         s_pct = max(0.0, min(1.0, self.start_sec / self.duration_sec)) if has_start else 0.0
         e_pct = max(0.0, min(1.0, self.end_sec / self.duration_sec)) if has_end else 1.0
 
@@ -82,7 +106,7 @@ class TrimmingSlider(QSlider):
         ex = margin + int(e_pct * groove_w)
 
         # ── 1. トリム有効領域のハイライト帯（明るいエメラルドグリーン） ──
-        painter.setBrush(QBrush(QColor(0, 230, 118, 140)))
+        painter.setBrush(QBrush(QColor(0, 230, 118, 150)))
         painter.setPen(Qt.NoPen)
         band_w = max(4, ex - sx)
         painter.drawRoundedRect(sx, cy - 5, band_w, 10, 3, 3)
@@ -372,6 +396,24 @@ class MainWindow(QMainWindow):
         self.lbl_seek_total_time = QLabel("00:00:00")
         self.lbl_seek_total_time.setStyleSheet("color: #aaaaaa; font-size: 14px;")
         h_slider_line.addWidget(self.lbl_seek_total_time)
+
+        # ── 🔍 Slider Zoom Controls ──
+        h_slider_line.addSpacing(10)
+        self.btn_zoom_out = QPushButton("🔍 -")
+        self.btn_zoom_out.setToolTip("タイムラインを縮小")
+        self.btn_zoom_out.setFixedWidth(36)
+        self.btn_zoom_out.clicked.connect(self._zoom_out_slider)
+        h_slider_line.addWidget(self.btn_zoom_out)
+
+        self.lbl_zoom_level = QLabel("1.0x")
+        self.lbl_zoom_level.setStyleSheet("color: #888888; font-size: 11px;")
+        h_slider_line.addWidget(self.lbl_zoom_level)
+
+        self.btn_zoom_in = QPushButton("🔍 +")
+        self.btn_zoom_in.setToolTip("タイムラインを拡大 (精密調整)")
+        self.btn_zoom_in.setFixedWidth(36)
+        self.btn_zoom_in.clicked.connect(self._zoom_in_slider)
+        h_slider_line.addWidget(self.btn_zoom_in)
 
         player_layout.addLayout(h_slider_line)
 
@@ -720,15 +762,43 @@ class MainWindow(QMainWindow):
 
         self.tabs_controls.addTab(tab_output, "出力設定")
 
+    def _zoom_in_slider(self):
+        if hasattr(self, 'slider_video_timeline') and isinstance(self.slider_video_timeline, TrimmingSlider):
+            cur = self.slider_video_timeline.zoom_factor
+            new_z = min(10.0, cur * 1.5)
+            self.slider_video_timeline.set_zoom_factor(new_z)
+            self.lbl_zoom_level.setText(f"{new_z:.1f}x")
+
+    def _zoom_out_slider(self):
+        if hasattr(self, 'slider_video_timeline') and isinstance(self.slider_video_timeline, TrimmingSlider):
+            cur = self.slider_video_timeline.zoom_factor
+            new_z = max(1.0, cur / 1.5)
+            self.slider_video_timeline.set_zoom_factor(new_z)
+            self.lbl_zoom_level.setText(f"{new_z:.1f}x")
+
     def _set_range_start_to_current(self):
         hms_str = seconds_to_hms(self.current_preview_sec)
         self.txt_range_start.setText(hms_str)
+        
+        # 終了点が設定されていて開始点より前の場合、安全に終了点をリセット/更新
+        st_sec = self.current_preview_sec
+        et_sec = hms_to_seconds(self.txt_range_end.text().strip()) if validate_hms(self.txt_range_end.text().strip()) else 0.0
+        if 0.0 < et_sec <= st_sec:
+            self.txt_range_end.setText("00:00:00")
+
         self._log_message(f"✂️ 切り出し開始時間を設定: {hms_str}")
         self._update_trim_status_label()
         self._on_title_setting_changed()
 
     def _set_range_end_to_current(self):
         hms_str = seconds_to_hms(self.current_preview_sec)
+        et_sec = self.current_preview_sec
+        st_sec = hms_to_seconds(self.txt_range_start.text().strip()) if validate_hms(self.txt_range_start.text().strip()) else 0.0
+        
+        if et_sec <= st_sec and st_sec > 0:
+            QMessageBox.warning(self, "トリミング設定注意", "終了点は開始点よりも後ろの時間（位置）に設定してください。")
+            return
+
         self.txt_range_end.setText(hms_str)
         self._log_message(f"✂️ 切り出し終了時間を設定: {hms_str}")
         self._update_trim_status_label()
