@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 class TrimmingSlider(QSlider):
     """
     トリミング開始点・終了点をスライダーバー上に視覚的にマーカー表示＆ハイライト表示し、
-    Ctrl+ホイール等でのズーム拡大縮小にも対応したカスタムスライダー
+    音声発生箇所（有音区間）の視覚化バーおよびCtrl+ホイールズームにも対応したカスタムスライダー
     """
     zoom_changed_signal = Signal(float)
 
@@ -49,7 +49,8 @@ class TrimmingSlider(QSlider):
         self.end_sec = 0.0
         self.duration_sec = 0.0
         self.zoom_factor = 1.0  # 1.0x 〜 10.0x
-        self.view_start_pct = 0.0  # 表示ウィンドウの開始位置 (0.0 ~ 1.0)
+        self.view_start_pct = 0.0
+        self.audio_intervals: List[Tuple[float, float]] = []  # 有音（音声あり）区間リスト
 
     def set_trim_range(self, start_sec: float, end_sec: float, duration_sec: float):
         self.start_sec = start_sec
@@ -57,12 +58,15 @@ class TrimmingSlider(QSlider):
         self.duration_sec = duration_sec
         self.update()
 
+    def set_audio_presence_intervals(self, audio_intervals: List[Tuple[float, float]]):
+        self.audio_intervals = audio_intervals
+        self.update()
+
     def set_zoom_factor(self, factor: float):
         self.zoom_factor = max(1.0, min(10.0, factor))
         self.update()
 
     def wheelEvent(self, event):
-        # マウスホイールでズーム拡大・縮小
         delta = event.angleDelta().y()
         if delta != 0:
             step = 1.2 if delta > 0 else 0.8
@@ -91,6 +95,19 @@ class TrimmingSlider(QSlider):
         groove_w = w - margin * 2
         if groove_w <= 0:
             return
+
+        # ── 0. 音声発生箇所（有音区間）の描画（スライダー直下のインジケーター帯） ──
+        if self.audio_intervals:
+            painter.setBrush(QBrush(QColor(56, 189, 248, 180)))  # 鮮やかなシアンブルー (音声あり)
+            painter.setPen(Qt.NoPen)
+            for a_start, a_end in self.audio_intervals:
+                st_pct = max(0.0, min(1.0, a_start / self.duration_sec))
+                et_pct = max(0.0, min(1.0, a_end / self.duration_sec))
+                ax1 = margin + int(st_pct * groove_w)
+                ax2 = margin + int(et_pct * groove_w)
+                aw = max(2, ax2 - ax1)
+                # スライダー溝のすぐ下(cy+6)に音声バーを描画
+                painter.drawRoundedRect(ax1, cy + 6, aw, 4, 2, 2)
 
         has_start = self.start_sec > 0.0
         has_end = 0.0 < self.end_sec < self.duration_sec
@@ -452,6 +469,18 @@ class MainWindow(QMainWindow):
         btn_reset_trim = QPushButton("🔄 トリム解除")
         btn_reset_trim.clicked.connect(self._reset_trim_range)
         h_btns_line.addWidget(btn_reset_trim)
+
+        h_btns_line.addSpacing(10)
+
+        # 🚀 専用トリミング実行ボタン
+        self.btn_execute_trim = QPushButton("🚀 設定範囲でトリミング実行")
+        self.btn_execute_trim.setStyleSheet(
+            "QPushButton { font-weight: bold; background-color: #8e24aa; color: white; padding: 5px 12px; border-radius: 4px; } "
+            "QPushButton:hover { background-color: #ab47bc; }"
+        )
+        self.btn_execute_trim.setToolTip("設定した開始点〜終了点の範囲でカット処理を実行して書き出します")
+        self.btn_execute_trim.clicked.connect(self._on_run_clicked)
+        h_btns_line.addWidget(self.btn_execute_trim)
 
         h_btns_line.addStretch()
 
@@ -1150,7 +1179,12 @@ class MainWindow(QMainWindow):
 
     def _on_analysis_finished(self, v_info, silences, keeps):
         self._set_processing_ui_state(False)
-        self._log_message(f"無音解析完了: 検出無音数={len(silences)}件, 保持区間数={len(keeps)}件")
+        self._log_message(f"無音解析完了: 検出無音数={len(silences)}件, 保持（音声）区間数={len(keeps)}件")
+
+        # 🎵 スライダーバー直下に音声発生箇所（有音区間）のシアン帯を可視化セット
+        if hasattr(self, 'slider_video_timeline') and isinstance(self.slider_video_timeline, TrimmingSlider):
+            audio_intervals = [(k.start, k.end) for k in keeps]
+            self.slider_video_timeline.set_audio_presence_intervals(audio_intervals)
 
         dlg = IntervalTableDialog(self, v_info.duration_seconds, silences, keeps)
         dlg.exec()
