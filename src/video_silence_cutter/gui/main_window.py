@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
     QComboBox, QProgressBar, QTextEdit, QFileDialog, QMessageBox, QGroupBox,
     QFormLayout, QColorDialog, QApplication, QSlider
 )
-from PySide6.QtGui import QAction, QKeySequence, QPixmap, QColor
+from PySide6.QtGui import QAction, QKeySequence, QPixmap, QColor, QPainter, QBrush, QPen
 from PySide6.QtCore import Qt, QTimer, QSize
 
 from ..core.ffmpeg_locator import FFmpegLocator
@@ -35,6 +35,69 @@ from .video_player_dialog import VideoPlayerDialog
 from .worker import SilenceAnalysisWorker, VideoProcessWorker
 
 logger = logging.getLogger(__name__)
+
+class TrimmingSlider(QSlider):
+    """
+    トリミング開始点・終了点をスライダーバー上に視覚的にマーカー表示＆ハイライト表示するカスタムスライダー
+    """
+    def __init__(self, parent=None):
+        super().__init__(Qt.Horizontal, parent)
+        self.start_sec = 0.0
+        self.end_sec = 0.0
+        self.duration_sec = 0.0
+
+    def set_trim_range(self, start_sec: float, end_sec: float, duration_sec: float):
+        self.start_sec = start_sec
+        self.end_sec = end_sec
+        self.duration_sec = duration_sec
+        self.update()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if self.duration_sec <= 0:
+            return
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        w = self.width()
+        h = self.height()
+        cy = h // 2
+
+        margin = 12
+        groove_w = w - margin * 2
+        if groove_w <= 0:
+            return
+
+        has_start = self.start_sec > 0.0
+        has_end = 0.0 < self.end_sec < self.duration_sec
+
+        if not (has_start or has_end):
+            return
+
+        s_pct = max(0.0, min(1.0, self.start_sec / self.duration_sec)) if has_start else 0.0
+        e_pct = max(0.0, min(1.0, self.end_sec / self.duration_sec)) if has_end else 1.0
+
+        sx = margin + int(s_pct * groove_w)
+        ex = margin + int(e_pct * groove_w)
+
+        # ── 1. トリム有効領域のハイライト帯（明るいエメラルドグリーン） ──
+        painter.setBrush(QBrush(QColor(0, 230, 118, 140)))
+        painter.setPen(Qt.NoPen)
+        band_w = max(4, ex - sx)
+        painter.drawRoundedRect(sx, cy - 5, band_w, 10, 3, 3)
+
+        # ── 2. 開始点マーカー 🟢 ──
+        if has_start:
+            painter.setBrush(QBrush(QColor('#00E676')))
+            painter.setPen(QPen(QColor('#FFFFFF'), 2))
+            painter.drawRoundedRect(sx - 4, cy - 10, 8, 20, 2, 2)
+
+        # ── 3. 終了点マーカー 🔴 ──
+        if has_end:
+            painter.setBrush(QBrush(QColor('#FF5252')))
+            painter.setPen(QPen(QColor('#FFFFFF'), 2))
+            painter.drawRoundedRect(ex - 4, cy - 10, 8, 20, 2, 2)
 
 class MainWindow(QMainWindow):
     def __init__(self, settings_service: SettingsService):
@@ -270,8 +333,9 @@ class MainWindow(QMainWindow):
         self.lbl_seek_curr_time.setStyleSheet("font-weight: bold; color: #007ACC; font-size: 14px;")
         h_slider_line.addWidget(self.lbl_seek_curr_time)
 
-        # High-visibility long timeline slider bar
-        self.slider_video_timeline = QSlider(Qt.Horizontal)
+        # High-visibility long timeline slider bar with visual trim markers
+        self.slider_video_timeline = TrimmingSlider(self)
+        self.slider_video_timeline.setOrientation(Qt.Horizontal)
         self.slider_video_timeline.setRange(0, 1000)
         self.slider_video_timeline.setValue(0)
         self.slider_video_timeline.setEnabled(False)
@@ -677,17 +741,25 @@ class MainWindow(QMainWindow):
     def _update_trim_status_label(self):
         st_str = self.txt_range_start.text().strip()
         et_str = self.txt_range_end.text().strip()
-        st_sec = hms_to_seconds(st_str)
-        et_sec = hms_to_seconds(et_str)
+        st_sec = hms_to_seconds(st_str) if validate_hms(st_str) else 0.0
+        et_sec = hms_to_seconds(et_str) if validate_hms(et_str) else 0.0
 
-        if st_sec == 0 and et_sec == 0:
+        total_dur = self.current_video_info.duration_seconds if self.current_video_info else 0.0
+
+        # スライダー上のビジュアルマーカー（🟢開始 / 🔴終了 / ハイライト帯）を更新
+        if hasattr(self, 'slider_video_timeline') and isinstance(self.slider_video_timeline, TrimmingSlider):
+            self.slider_video_timeline.set_trim_range(st_sec, et_sec, total_dur)
+
+        if st_sec == 0.0 and et_sec == 0.0:
             self.lbl_trim_status.setText("✂️ トリム指定: 未設定 (動画全体を出力)")
-            self.lbl_trim_status.setStyleSheet("font-weight: bold; color: #888888; font-size: 12px; margin-left: 10px;")
+            self.lbl_trim_status.setStyleSheet("font-weight: bold; color: #888888; font-size: 12px; margin-top: 4px;")
         else:
             end_label = seconds_to_hms(et_sec) if et_sec > 0 else "末尾"
-            dur_str = f" (長さ: {seconds_to_hms(max(0.0, et_sec - st_sec))})" if et_sec > st_sec else ""
-            self.lbl_trim_status.setText(f"✂️ トリム指定中: {seconds_to_hms(st_sec)} ～ {end_label}{dur_str}")
-            self.lbl_trim_status.setStyleSheet("font-weight: bold; color: #007ACC; font-size: 12px; margin-left: 10px;")
+            calc_end = et_sec if et_sec > 0 else (total_dur if total_dur > 0 else st_sec)
+            dur_sec = max(0.0, calc_end - st_sec)
+            dur_str = f" (切り出し長さ: {seconds_to_hms(dur_sec)})" if dur_sec > 0 else ""
+            self.lbl_trim_status.setText(f"✂️ トリム指定中: 🟢 {seconds_to_hms(st_sec)} ～ 🔴 {end_label}{dur_str}")
+            self.lbl_trim_status.setStyleSheet("font-weight: bold; color: #007ACC; font-size: 12px; margin-top: 4px;")
 
     def _pick_color(self, button: QPushButton):
         curr_hex = button.property("hex_color") or "#FFFFFF"
@@ -819,7 +891,8 @@ class MainWindow(QMainWindow):
 
             # Auto set range end
             self.txt_range_start.setText("00:00:00")
-            self.txt_range_end.setText(seconds_to_hms(v_info.duration_seconds))
+            self.txt_range_end.setText("00:00:00")
+            self._update_trim_status_label()
 
             # Auto set default output filename
             out_dir = self.txt_output_dir.text().strip() or str(Path(file_path).parent)
