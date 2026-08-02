@@ -108,6 +108,40 @@ class ProcessService:
                     has_active_title = True
                     break
 
+        # ── ⚡ 超高速トリミング分岐 (タイトル合成なし & 単一トリム切り出し) ──
+        # 再エンコードが一切不要なため 1秒以内で爆速切り出し完了
+        if not has_active_title and len(keeps) == 1:
+            k = keeps[0]
+            logger.info(f"⚡ 超高速 Stream Copy モードを適用します: {k.start:.2f}s -> {k.end:.2f}s")
+            self.video_processor.process_single_trim_stream_copy(
+                input_path=input_path,
+                output_path=output_path,
+                start_sec=k.start,
+                end_sec=k.end,
+                progress_callback=progress_cb
+            )
+
+            if progress_cb:
+                progress_cb(95.0, "出力動画を検証中...", time.time() - start_time, 0.0)
+
+            valid, val_msg, out_info = self.output_validator.validate(output_path, expected_output_duration)
+            if not valid:
+                logger.warning(f"出力検証の警告: {val_msg}")
+
+            return ProcessResult(
+                success=True,
+                output_path=output_path,
+                original_seconds=v_info.duration_seconds,
+                processed_seconds=expected_output_duration,
+                reduced_seconds=max(0.0, v_info.duration_seconds - expected_output_duration),
+                reduction_ratio=1.0 - (expected_output_duration / v_info.duration_seconds) if v_info.duration_seconds > 0 else 0.0,
+                elapsed_time_seconds=time.time() - start_time,
+                output_video_info=out_info,
+                keep_intervals=keeps,
+                silence_intervals=silences,
+                message=f"超高速トリミング完了 ({time.time() - start_time:.1f}秒)"
+            )
+
         temp_dir_obj = create_temp_dir()
         temp_dir = Path(temp_dir_obj.name)
 

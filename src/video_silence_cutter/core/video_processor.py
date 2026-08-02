@@ -133,6 +133,93 @@ class VideoProcessor:
         finally:
             self._process = None
 
+    def process_single_trim_stream_copy(
+        self,
+        input_path: str,
+        output_path: str,
+        start_sec: float,
+        end_sec: float,
+        progress_callback: Optional[Callable[[float, str, float, float], None]] = None
+    ) -> bool:
+        """
+        単一のトリミング区間を無再エンコード Stream Copy (-c copy) で超高速切り出しする。
+        処理時間はわずか 0.5秒〜2秒で完了する。
+        """
+        self._is_cancelled = False
+        start_time = time.time()
+        out_file = Path(output_path)
+        temp_out_file = out_file.with_name(out_file.name + ".processing.mp4")
+
+        if temp_out_file.exists():
+            try:
+                temp_out_file.unlink()
+            except Exception:
+                pass
+
+        cmd = [
+            str(self.ffmpeg_path),
+            "-y",
+            "-loglevel", "warning",
+            "-ss", f"{max(0.0, start_sec):.3f}",
+        ]
+
+        if end_sec > start_sec:
+            cmd.extend(["-to", f"{end_sec:.3f}"])
+
+        cmd.extend([
+            "-i", input_path,
+            "-c", "copy",
+            "-movflags", "+faststart",
+            str(temp_out_file)
+        ])
+
+        logger.info(f"Executing Ultra-Fast Stream Copy Trim: {' '.join(cmd)}")
+
+        if progress_callback:
+            progress_callback(50.0, "超高速 Stream Copy で動画を切り出し中...", 0.1, 0.0)
+
+        self._process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+            start_new_session=True
+        )
+
+        stderr_lines: List[str] = []
+        def _read_stderr():
+            try:
+                for s_line in self._process.stderr:
+                    if s_line:
+                        stderr_lines.append(s_line)
+            except Exception:
+                pass
+
+        t_err = threading.Thread(target=_read_stderr, daemon=True)
+        t_err.start()
+
+        try:
+            self._process.wait()
+            if self._process.returncode != 0:
+                full_err = "".join(stderr_lines)
+                logger.error(f"Stream Copy Trim failed: {full_err}")
+                if temp_out_file.exists():
+                    temp_out_file.unlink()
+                raise RuntimeError(f"超高速トリミング切断エラー:\n{full_err[-300:]}")
+
+            if temp_out_file.exists():
+                temp_out_file.replace(out_file)
+                logger.info(f"Stream Copy Trim completed -> {out_file}")
+                if progress_callback:
+                    progress_callback(100.0, "超高速トリミング完了！", time.time() - start_time, 0.0)
+                return True
+            else:
+                raise RuntimeError("出力一時ファイルが見つかりません。")
+
+        finally:
+            self._process = None
+
     def process_video(
         self,
         input_path: str,
