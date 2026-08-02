@@ -216,12 +216,6 @@ class MainWindow(QMainWindow):
         h_select.addWidget(self.txt_input_path)
         h_select.addWidget(btn_browse)
 
-        self.btn_play_top = QPushButton("▶ プレビューで元動画を再生")
-        self.btn_play_top.setStyleSheet("font-weight: bold; background-color: #2e7d32; color: white; padding: 5px 10px;")
-        self.btn_play_top.setEnabled(False)
-        self.btn_play_top.clicked.connect(self._toggle_preview_play)
-        h_select.addWidget(self.btn_play_top)
-
         top_layout.addLayout(h_select)
 
         self.lbl_video_info = QLabel("動画未選択 (動画ファイルを上記にドラッグ＆ドロップしてください)")
@@ -264,8 +258,8 @@ class MainWindow(QMainWindow):
         right_layout.addWidget(self.preview_widget, 1)
 
         # Player & Timeline Seek Bar Layout Directly Under Preview Canvas
-        player_box = QGroupBox("🎬 動画タイムライン・再生コントロール", right_widget)
-        player_box.setMinimumHeight(80)
+        player_box = QGroupBox("🎬 動画タイムライン・再生＆トリミングコントロール", right_widget)
+        player_box.setMinimumHeight(110)
         player_layout = QVBoxLayout(player_box)
         player_layout.setContentsMargins(10, 10, 10, 10)
 
@@ -339,6 +333,28 @@ class MainWindow(QMainWindow):
         h_time_line.addWidget(self.slider_volume)
 
         player_layout.addLayout(h_time_line)
+
+        # Video Trimming Range Control Line
+        h_trim_line = QHBoxLayout()
+        btn_set_start = QPushButton("✂️ 開始点に設定")
+        btn_set_start.setStyleSheet("font-weight: bold; background-color: #007ACC; color: white; padding: 4px 8px;")
+        btn_set_start.clicked.connect(self._set_range_start_to_current)
+        h_trim_line.addWidget(btn_set_start)
+
+        btn_set_end = QPushButton("✂️ 終了点に設定")
+        btn_set_end.setStyleSheet("font-weight: bold; background-color: #d32f2f; color: white; padding: 4px 8px;")
+        btn_set_end.clicked.connect(self._set_range_end_to_current)
+        h_trim_line.addWidget(btn_set_end)
+
+        btn_reset_trim = QPushButton("🔄 トリム解除")
+        btn_reset_trim.clicked.connect(self._reset_trim_range)
+        h_trim_line.addWidget(btn_reset_trim)
+
+        self.lbl_trim_status = QLabel("✂️ トリム指定: 未設定 (動画全体を出力)")
+        self.lbl_trim_status.setStyleSheet("font-weight: bold; color: #4caf50; font-size: 12px; margin-left: 10px;")
+        h_trim_line.addWidget(self.lbl_trim_status, 1)
+
+        player_layout.addLayout(h_trim_line)
         right_layout.addWidget(player_box)
 
         self.splitter.addWidget(right_widget)
@@ -633,13 +649,37 @@ class MainWindow(QMainWindow):
         hms_str = seconds_to_hms(self.current_preview_sec)
         self.txt_range_start.setText(hms_str)
         self._log_message(f"✂️ 切り出し開始時間を設定: {hms_str}")
+        self._update_trim_status_label()
         self._on_title_setting_changed()
 
     def _set_range_end_to_current(self):
         hms_str = seconds_to_hms(self.current_preview_sec)
         self.txt_range_end.setText(hms_str)
         self._log_message(f"✂️ 切り出し終了時間を設定: {hms_str}")
+        self._update_trim_status_label()
         self._on_title_setting_changed()
+
+    def _reset_trim_range(self):
+        self.txt_range_start.setText("00:00:00")
+        self.txt_range_end.setText("00:00:00")
+        self._log_message("🔄 切り出しトリム範囲をリセットしました")
+        self._update_trim_status_label()
+        self._on_title_setting_changed()
+
+    def _update_trim_status_label(self):
+        st_str = self.txt_range_start.text().strip()
+        et_str = self.txt_range_end.text().strip()
+        st_sec = hms_to_seconds(st_str)
+        et_sec = hms_to_seconds(et_str)
+
+        if st_sec == 0 and et_sec == 0:
+            self.lbl_trim_status.setText("✂️ トリム指定: 未設定 (動画全体を出力)")
+            self.lbl_trim_status.setStyleSheet("font-weight: bold; color: #888888; font-size: 12px; margin-left: 10px;")
+        else:
+            end_label = seconds_to_hms(et_sec) if et_sec > 0 else "末尾"
+            dur_str = f" (長さ: {seconds_to_hms(max(0.0, et_sec - st_sec))})" if et_sec > st_sec else ""
+            self.lbl_trim_status.setText(f"✂️ トリム指定中: {seconds_to_hms(st_sec)} ～ {end_label}{dur_str}")
+            self.lbl_trim_status.setStyleSheet("font-weight: bold; color: #007ACC; font-size: 12px; margin-left: 10px;")
 
     def _pick_color(self, button: QPushButton):
         curr_hex = button.property("hex_color") or "#FFFFFF"
@@ -749,7 +789,6 @@ class MainWindow(QMainWindow):
         self.btn_play_preview.setEnabled(True)
         self.btn_stop_preview.setEnabled(True)
         self.slider_video_timeline.setEnabled(True)
-        self.btn_play_top.setEnabled(True)
         self.preview_widget.set_video_source(file_path)
         self.app_settings["last_open_dir"] = str(Path(file_path).parent)
         self.settings_service.save_settings(self.app_settings)
