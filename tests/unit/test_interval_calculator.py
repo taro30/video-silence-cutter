@@ -104,3 +104,16 @@ def test_zero_padding():
     assert len(keeps) == 2
     assert keeps[0] == KeepInterval(0.0, 10.0)
     assert keeps[1] == KeepInterval(15.0, 20.0)
+
+def test_trimming_only_no_silence():
+    # Video: 30s. Range: 5s ~ 15s. No silence.
+    # Expected keep: [5.0, 15.0]
+    keeps = IntervalCalculator.calculate_keep_intervals(
+        video_duration=30.0,
+        silence_intervals=[],
+        padding=0.2,
+        range_start=5.0,
+        range_end=15.0
+    )
+    assert len(keeps) == 1
+    assert keeps[0] == KeepInterval(5.0, 15.0)
