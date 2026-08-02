@@ -17,6 +17,8 @@ logger = logging.getLogger(__name__)
 class PreviewWidget(QWidget):
     file_dropped_signal = Signal(str)
     title_position_dragged_signal = Signal(int, int, int)  # (title_index 1..3, new_x, new_y)
+    position_changed_signal = Signal(int)  # position in ms
+    duration_changed_signal = Signal(int)  # duration in ms
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -90,10 +92,10 @@ class PreviewWidget(QWidget):
         self.stack.setCurrentIndex(0)
 
     def _on_position_changed(self, position_ms: int):
-        pass
+        self.position_changed_signal.emit(position_ms)
 
     def _on_duration_changed(self, duration_ms: int):
-        pass
+        self.duration_changed_signal.emit(duration_ms)
 
     def _on_slider_moved(self, position_ms: int):
         self.player.setPosition(position_ms)

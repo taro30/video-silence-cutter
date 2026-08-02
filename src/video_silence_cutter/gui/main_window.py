@@ -318,6 +318,7 @@ class MainWindow(QMainWindow):
         self.preview_widget = PreviewWidget()
         self.preview_widget.file_dropped_signal.connect(self._load_video_from_path)
         self.preview_widget.title_position_dragged_signal.connect(self._on_title_dragged)
+        self.preview_widget.position_changed_signal.connect(self._on_video_player_position_changed)
         right_layout.addWidget(self.preview_widget, 1)
 
         # Player & Timeline Seek Bar Layout Directly Under Preview Canvas
@@ -848,6 +849,7 @@ class MainWindow(QMainWindow):
     def _on_timeline_slider_moved(self, val: int):
         if self.current_video_info and self.current_video_info.duration_seconds > 0:
             sec = (val / 1000.0) * self.current_video_info.duration_seconds
+            self.current_preview_sec = sec
             self.lbl_seek_curr_time.setText(seconds_to_hms(sec))
             input_path = self.txt_input_path.text().strip()
             if input_path and Path(input_path).is_file():
@@ -855,6 +857,17 @@ class MainWindow(QMainWindow):
                 if self.preview_service.capture_frame(input_path, sec, frame_png):
                     self.base_frame_path = frame_png
                     self._update_preview()
+
+    def _on_video_player_position_changed(self, pos_ms: int):
+        if self.current_video_info and self.current_video_info.duration_seconds > 0:
+            sec = pos_ms / 1000.0
+            self.current_preview_sec = sec
+            self.lbl_seek_curr_time.setText(seconds_to_hms(sec))
+            val = int((sec / self.current_video_info.duration_seconds) * 1000.0)
+            if not self.slider_video_timeline.isSliderDown():
+                self.slider_video_timeline.blockSignals(True)
+                self.slider_video_timeline.setValue(val)
+                self.slider_video_timeline.blockSignals(False)
 
     def _on_timeline_slider_changed(self, val: int):
         if not self.slider_video_timeline.isSliderDown():
