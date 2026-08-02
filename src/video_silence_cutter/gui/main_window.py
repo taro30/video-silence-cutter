@@ -668,6 +668,8 @@ class MainWindow(QMainWindow):
 
         self.txt_range_start = QLineEdit("00:00:00")
         self.txt_range_end = QLineEdit("00:00:00")
+        self.txt_range_start.textChanged.connect(self._update_trim_status_label)
+        self.txt_range_end.textChanged.connect(self._update_trim_status_label)
 
         btn_set_start = QPushButton("✂️ 現在位置を開始点に設定")
         btn_set_start.clicked.connect(self._set_range_start_to_current)
