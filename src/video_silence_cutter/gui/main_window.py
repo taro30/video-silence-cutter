@@ -259,102 +259,110 @@ class MainWindow(QMainWindow):
 
         # Player & Timeline Seek Bar Layout Directly Under Preview Canvas
         player_box = QGroupBox("🎬 動画タイムライン・再生＆トリミングコントロール", right_widget)
-        player_box.setMinimumHeight(110)
+        player_box.setMinimumHeight(120)
         player_layout = QVBoxLayout(player_box)
         player_layout.setContentsMargins(10, 10, 10, 10)
 
-        # Timeline Slider Line
-        h_time_line = QHBoxLayout()
-
-        self.btn_play_preview = QPushButton("▶ 再生")
-        self.btn_play_preview.setFixedWidth(90)
-        self.btn_play_preview.setStyleSheet(
-            "QPushButton { font-weight: bold; background-color: #2e7d32; color: white; padding: 6px; border-radius: 4px; } "
-            "QPushButton:hover { background-color: #388e3c; }"
-        )
-        self.btn_play_preview.setEnabled(False)
-        self.btn_play_preview.clicked.connect(self._toggle_preview_play)
-        h_time_line.addWidget(self.btn_play_preview)
-
-        self.btn_stop_preview = QPushButton("⏹ 停止")
-        self.btn_stop_preview.setFixedWidth(70)
-        self.btn_stop_preview.setStyleSheet("padding: 6px;")
-        self.btn_stop_preview.setEnabled(False)
-        self.btn_stop_preview.clicked.connect(self._stop_preview_play)
-        h_time_line.addWidget(self.btn_stop_preview)
+        # ── Line 1: Ultra-wide Full Width Timeline Seek Slider ──
+        h_slider_line = QHBoxLayout()
 
         self.lbl_seek_curr_time = QLabel("00:00:00")
-        self.lbl_seek_curr_time.setStyleSheet("font-weight: bold; color: #007ACC; font-size: 13px;")
-        h_time_line.addWidget(self.lbl_seek_curr_time)
+        self.lbl_seek_curr_time.setStyleSheet("font-weight: bold; color: #007ACC; font-size: 14px;")
+        h_slider_line.addWidget(self.lbl_seek_curr_time)
 
-        # High precision timeline slider bar with custom modern styling
+        # High-visibility long timeline slider bar
         self.slider_video_timeline = QSlider(Qt.Horizontal)
         self.slider_video_timeline.setRange(0, 1000)
         self.slider_video_timeline.setValue(0)
         self.slider_video_timeline.setEnabled(False)
-        self.slider_video_timeline.setMinimumHeight(30)
+        self.slider_video_timeline.setMinimumHeight(36)
         self.slider_video_timeline.setStyleSheet("""
             QSlider::groove:horizontal {
-                height: 8px;
-                background: #3f3f46;
-                border-radius: 4px;
+                height: 10px;
+                background: #27272a;
+                border-radius: 5px;
             }
             QSlider::sub-page:horizontal {
-                background: #007ACC;
-                border-radius: 4px;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #007ACC, stop:1 #0288d1);
+                border-radius: 5px;
             }
             QSlider::handle:horizontal {
                 background: #ffffff;
-                border: 2px solid #007ACC;
-                width: 20px;
+                border: 3px solid #007ACC;
+                width: 22px;
+                height: 22px;
                 margin-top: -6px;
                 margin-bottom: -6px;
-                border-radius: 10px;
+                border-radius: 11px;
             }
             QSlider::handle:horizontal:hover {
                 background: #e0e0e0;
+                border: 3px solid #0288d1;
             }
         """)
         self.slider_video_timeline.sliderMoved.connect(self._on_timeline_slider_moved)
         self.slider_video_timeline.valueChanged.connect(self._on_timeline_slider_changed)
-        h_time_line.addWidget(self.slider_video_timeline, 1)
+        h_slider_line.addWidget(self.slider_video_timeline, 1)
 
         self.lbl_seek_total_time = QLabel("00:00:00")
-        self.lbl_seek_total_time.setStyleSheet("color: #aaaaaa; font-size: 13px;")
-        h_time_line.addWidget(self.lbl_seek_total_time)
+        self.lbl_seek_total_time.setStyleSheet("color: #aaaaaa; font-size: 14px;")
+        h_slider_line.addWidget(self.lbl_seek_total_time)
 
-        h_time_line.addSpacing(10)
-        h_time_line.addWidget(QLabel("🔊"))
-        self.slider_volume = QSlider(Qt.Horizontal)
-        self.slider_volume.setRange(0, 100)
-        self.slider_volume.setValue(80)
-        self.slider_volume.setFixedWidth(70)
-        self.slider_volume.valueChanged.connect(self._on_volume_changed)
-        h_time_line.addWidget(self.slider_volume)
+        player_layout.addLayout(h_slider_line)
 
-        player_layout.addLayout(h_time_line)
+        # ── Line 2: Playback & Trimming Action Buttons ──
+        h_btns_line = QHBoxLayout()
 
-        # Video Trimming Range Control Line
-        h_trim_line = QHBoxLayout()
+        self.btn_play_preview = QPushButton("▶ 再生")
+        self.btn_play_preview.setFixedWidth(85)
+        self.btn_play_preview.setStyleSheet(
+            "QPushButton { font-weight: bold; background-color: #2e7d32; color: white; padding: 5px; border-radius: 4px; } "
+            "QPushButton:hover { background-color: #388e3c; }"
+        )
+        self.btn_play_preview.setEnabled(False)
+        self.btn_play_preview.clicked.connect(self._toggle_preview_play)
+        h_btns_line.addWidget(self.btn_play_preview)
+
+        self.btn_stop_preview = QPushButton("⏹ 停止")
+        self.btn_stop_preview.setFixedWidth(65)
+        self.btn_stop_preview.setStyleSheet("padding: 5px;")
+        self.btn_stop_preview.setEnabled(False)
+        self.btn_stop_preview.clicked.connect(self._stop_preview_play)
+        h_btns_line.addWidget(self.btn_stop_preview)
+
+        h_btns_line.addSpacing(15)
+
         btn_set_start = QPushButton("✂️ 開始点に設定")
-        btn_set_start.setStyleSheet("font-weight: bold; background-color: #007ACC; color: white; padding: 4px 8px;")
+        btn_set_start.setStyleSheet("font-weight: bold; background-color: #007ACC; color: white; padding: 5px 10px;")
         btn_set_start.clicked.connect(self._set_range_start_to_current)
-        h_trim_line.addWidget(btn_set_start)
+        h_btns_line.addWidget(btn_set_start)
 
         btn_set_end = QPushButton("✂️ 終了点に設定")
-        btn_set_end.setStyleSheet("font-weight: bold; background-color: #d32f2f; color: white; padding: 4px 8px;")
+        btn_set_end.setStyleSheet("font-weight: bold; background-color: #d32f2f; color: white; padding: 5px 10px;")
         btn_set_end.clicked.connect(self._set_range_end_to_current)
-        h_trim_line.addWidget(btn_set_end)
+        h_btns_line.addWidget(btn_set_end)
 
         btn_reset_trim = QPushButton("🔄 トリム解除")
         btn_reset_trim.clicked.connect(self._reset_trim_range)
-        h_trim_line.addWidget(btn_reset_trim)
+        h_btns_line.addWidget(btn_reset_trim)
 
+        h_btns_line.addStretch()
+
+        h_btns_line.addWidget(QLabel("🔊"))
+        self.slider_volume = QSlider(Qt.Horizontal)
+        self.slider_volume.setRange(0, 100)
+        self.slider_volume.setValue(80)
+        self.slider_volume.setFixedWidth(80)
+        self.slider_volume.valueChanged.connect(self._on_volume_changed)
+        h_btns_line.addWidget(self.slider_volume)
+
+        player_layout.addLayout(h_btns_line)
+
+        # ── Line 3: Trimming Status Indicator ──
         self.lbl_trim_status = QLabel("✂️ トリム指定: 未設定 (動画全体を出力)")
-        self.lbl_trim_status.setStyleSheet("font-weight: bold; color: #4caf50; font-size: 12px; margin-left: 10px;")
-        h_trim_line.addWidget(self.lbl_trim_status, 1)
+        self.lbl_trim_status.setStyleSheet("font-weight: bold; color: #888888; font-size: 12px; margin-top: 4px;")
+        player_layout.addWidget(self.lbl_trim_status)
 
-        player_layout.addLayout(h_trim_line)
         right_layout.addWidget(player_box)
 
         self.splitter.addWidget(right_widget)

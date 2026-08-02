@@ -42,42 +42,8 @@ class PreviewWidget(QWidget):
 
         main_v_layout.addWidget(self.stack, 1)
 
-        # 2. Integrated Playback Control Bar (Directly inside right preview panel)
-        ctrl_bar = QHBoxLayout()
-        ctrl_bar.setContentsMargins(4, 4, 4, 4)
+        # Note: Playback controls are unified in main_window.py directly under preview panel
 
-        self.btn_play_pause = QPushButton("▶ 再生")
-        self.btn_play_pause.setFixedWidth(80)
-        self.btn_play_pause.setStyleSheet("font-weight: bold; background-color: #007ACC; color: white;")
-        self.btn_play_pause.clicked.connect(self.toggle_play_pause)
-        ctrl_bar.addWidget(self.btn_play_pause)
-
-        self.btn_stop = QPushButton("⏹ 停止")
-        self.btn_stop.setFixedWidth(60)
-        self.btn_stop.clicked.connect(self.stop_video)
-        ctrl_bar.addWidget(self.btn_stop)
-
-        self.lbl_current_time = QLabel("00:00:00")
-        ctrl_bar.addWidget(self.lbl_current_time)
-
-        self.slider_time = QSlider(Qt.Horizontal)
-        self.slider_time.setRange(0, 0)
-        self.slider_time.sliderMoved.connect(self._on_slider_moved)
-        ctrl_bar.addWidget(self.slider_time)
-
-        self.lbl_total_time = QLabel("00:00:00")
-        ctrl_bar.addWidget(self.lbl_total_time)
-
-        ctrl_bar.addSpacing(10)
-        ctrl_bar.addWidget(QLabel("🔊"))
-        self.slider_volume = QSlider(Qt.Horizontal)
-        self.slider_volume.setRange(0, 100)
-        self.slider_volume.setValue(80)
-        self.slider_volume.setFixedWidth(70)
-        self.slider_volume.valueChanged.connect(self._on_volume_changed)
-        ctrl_bar.addWidget(self.slider_volume)
-
-        main_v_layout.addLayout(ctrl_bar)
 
         # 3. Setup QMediaPlayer
         self.player = QMediaPlayer(self)
@@ -106,7 +72,6 @@ class PreviewWidget(QWidget):
         self.video_path = video_path
         if Path(video_path).is_file():
             self.player.setSource(QUrl.fromLocalFile(video_path))
-            self.btn_play_pause.setEnabled(True)
 
     def toggle_play_pause(self):
         if not self.video_path or not Path(self.video_path).is_file():
@@ -114,29 +79,21 @@ class PreviewWidget(QWidget):
 
         if self.player.playbackState() == QMediaPlayer.PlayingState:
             self.player.pause()
-            self.btn_play_pause.setText("▶ 再生")
             # Return to title editing preview frame
             self.stack.setCurrentIndex(0)
         else:
             self.stack.setCurrentIndex(1)
             self.player.play()
-            self.btn_play_pause.setText("⏸ 一時停止")
 
     def stop_video(self):
         self.player.stop()
-        self.btn_play_pause.setText("▶ 再生")
         self.stack.setCurrentIndex(0)
 
     def _on_position_changed(self, position_ms: int):
-        if not self.slider_time.isSliderDown():
-            self.slider_time.setValue(position_ms)
-        sec = position_ms / 1000.0
-        self.lbl_current_time.setText(seconds_to_hms(sec))
+        pass
 
     def _on_duration_changed(self, duration_ms: int):
-        self.slider_time.setRange(0, duration_ms)
-        sec = duration_ms / 1000.0
-        self.lbl_total_time.setText(seconds_to_hms(sec))
+        pass
 
     def _on_slider_moved(self, position_ms: int):
         self.player.setPosition(position_ms)
