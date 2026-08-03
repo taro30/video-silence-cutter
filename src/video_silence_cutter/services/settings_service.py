@@ -2,7 +2,7 @@ import json
 import shutil
 import logging
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 from ..utils.path_utils import get_app_support_dir
 
 logger = logging.getLogger(__name__)
@@ -75,7 +75,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
 }
 
 class SettingsService:
-    def __init__(self, custom_path: Path = None):
+    def __init__(self, custom_path: Optional[Path] = None):
         if custom_path:
             self.settings_file = custom_path
         else:

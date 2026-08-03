@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import QAction, QKeySequence, QPixmap, QColor, QPainter, QBrush, QPen
 from PySide6.QtCore import Qt, QTimer, QSize, Signal
+from PySide6.QtMultimedia import QMediaPlayer
 
 from ..core.ffmpeg_locator import FFmpegLocator
 from ..models.video_info import VideoInfo

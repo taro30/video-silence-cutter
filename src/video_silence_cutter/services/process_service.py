@@ -1,7 +1,5 @@
-import os
 import time
 import logging
-import subprocess
 from pathlib import Path
 from typing import Callable, Optional, List
 
@@ -128,18 +126,28 @@ class ProcessService:
             if not valid:
                 logger.warning(f"出力検証の警告: {val_msg}")
 
+            total_elapsed = time.time() - start_time
+            reduced_sec = max(0.0, v_info.duration_seconds - expected_output_duration)
+            ratio = (1.0 - (expected_output_duration / v_info.duration_seconds)) if v_info.duration_seconds > 0 else 0.0
+
             return ProcessResult(
                 success=True,
-                output_path=output_path,
-                original_seconds=v_info.duration_seconds,
-                processed_seconds=expected_output_duration,
-                reduced_seconds=max(0.0, v_info.duration_seconds - expected_output_duration),
-                reduction_ratio=1.0 - (expected_output_duration / v_info.duration_seconds) if v_info.duration_seconds > 0 else 0.0,
-                elapsed_time_seconds=time.time() - start_time,
-                output_video_info=out_info,
-                keep_intervals=keeps,
-                silence_intervals=silences,
-                message=f"超高速トリミング完了 ({time.time() - start_time:.1f}秒)"
+                input_file=input_path,
+                output_file=output_path,
+                original_duration=v_info.duration_seconds,
+                processed_range_duration=v_info.duration_seconds,
+                output_duration=expected_output_duration,
+                reduced_seconds=reduced_sec,
+                reduction_ratio=ratio,
+                silence_count=len(silences),
+                deleted_interval_count=len(silences),
+                elapsed_seconds=total_elapsed,
+                video_codec=out_info.video_codec if out_info else "unknown",
+                audio_codec=(out_info.audio_codec or "なし") if out_info else "なし",
+                width=out_info.width if out_info else 0,
+                height=out_info.height if out_info else 0,
+                fps=out_info.fps if out_info else 0.0,
+                error_message=""
             )
 
         temp_dir_obj = create_temp_dir()

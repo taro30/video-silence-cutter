@@ -22,3 +22,4 @@ htmlcov/
 # Video Silence Cutter temp files
 *.processing.mp4
 assets/AppIcon.iconset/
+*.egg-info/

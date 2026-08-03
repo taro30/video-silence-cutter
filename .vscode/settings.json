@@ -1,0 +1,8 @@
+{
+  "python.analysis.extraPaths": [
+    "./src",
+    "./src/video_silence_cutter"
+  ],
+  "python.analysis.autoSearchPaths": true,
+  "python.defaultInterpreterPath": "./.venv/bin/python"
+}

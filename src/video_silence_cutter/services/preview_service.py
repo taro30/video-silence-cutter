@@ -1,14 +1,12 @@
-import os
 import subprocess
 import logging
 from pathlib import Path
 from typing import Optional
-from PySide6.QtGui import QImage, QPixmap, QColor, QPainter, QFont, QPen, QBrush
+from PySide6.QtGui import QImage, QPixmap, QColor, QPainter, QFont
 from PySide6.QtCore import Qt, QRect
 
 from ..core.ffmpeg_locator import FFmpegLocator
 from ..models.title_settings import TitleSettingsGroup, SingleTitleSettings
-from ..services.font_service import FontService
 
 logger = logging.getLogger(__name__)
 
