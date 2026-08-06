@@ -71,6 +71,7 @@ class MainWindow(QMainWindow):
         self.analysis_worker: Optional[SilenceAnalysisWorker] = None
         self.process_worker: Optional[VideoProcessWorker] = None
         self.last_result: Optional[ProcessResult] = None
+        self.current_preview_sec: float = 0.0
 
         self._setup_menu_bar()
         self._init_ui()
@@ -80,9 +81,28 @@ class MainWindow(QMainWindow):
 
     def _apply_theme(self):
         self.setStyleSheet("""
-            QMainWindow {
+            QMainWindow, QWidget {
                 background-color: #1e1e2e;
                 color: #cdd6f4;
+            }
+            QLabel {
+                color: #cdd6f4;
+                font-size: 13px;
+            }
+            QCheckBox {
+                color: #cdd6f4;
+                font-size: 13px;
+            }
+            QCheckBox::indicator {
+                width: 15px;
+                height: 15px;
+                border: 1px solid #45475a;
+                border-radius: 3px;
+                background-color: #313244;
+            }
+            QCheckBox::indicator:checked {
+                background-color: #89b4fa;
+                border-color: #89b4fa;
             }
             QGroupBox {
                 font-weight: bold;
@@ -91,6 +111,7 @@ class MainWindow(QMainWindow):
                 margin-top: 6px;
                 padding-top: 10px;
                 background-color: #181825;
+                color: #cdd6f4;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
@@ -137,6 +158,20 @@ class MainWindow(QMainWindow):
                 border-radius: 4px;
                 padding: 4px 8px;
             }
+            QComboBox::drop-down {
+                border: none;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #313244;
+                color: #cdd6f4;
+                selection-background-color: #45475a;
+            }
+            QSpinBox::up-button, QSpinBox::down-button,
+            QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {
+                background-color: #45475a;
+                border: none;
+                border-radius: 2px;
+            }
             QProgressBar {
                 border: 1px solid #45475a;
                 border-radius: 6px;
@@ -147,6 +182,22 @@ class MainWindow(QMainWindow):
             QProgressBar::chunk {
                 background-color: #89b4fa;
                 border-radius: 5px;
+            }
+            QTextEdit {
+                background-color: #1e1e1e;
+                color: #d4d4d4;
+            }
+            QScrollBar:vertical, QScrollBar:horizontal {
+                background-color: #1e1e2e;
+                width: 8px;
+                height: 8px;
+            }
+            QScrollBar::handle:vertical, QScrollBar::handle:horizontal {
+                background-color: #45475a;
+                border-radius: 4px;
+            }
+            QScrollBar::add-line, QScrollBar::sub-line {
+                background: none;
             }
         """)
 
@@ -571,7 +622,7 @@ class MainWindow(QMainWindow):
 
         spin_end = QDoubleSpinBox()
         spin_end.setRange(0.0, 86400.0)
-        spin_end.setValue(12.0)
+        spin_end.setValue(15.0)
         spin_end.valueChanged.connect(lambda: self._on_title_setting_changed())
 
         form.addRow(chk_enable)
@@ -848,6 +899,9 @@ class MainWindow(QMainWindow):
             sec = (val / 1000.0) * self.current_video_info.duration_seconds
             self.current_preview_sec = sec
             self.lbl_seek_curr_time.setText(seconds_to_hms(sec))
+            # 動画プレイヤーのポジションも同期させる（シーク後に途中から再生できるようにする）
+            pos_ms = int(sec * 1000)
+            self.preview_widget.player.setPosition(pos_ms)
             input_path = self.txt_input_path.text().strip()
             if input_path and Path(input_path).is_file():
                 frame_png = Path(self.current_temp_dir.name) / f"frame_seek_{val}.png"
@@ -990,6 +1044,14 @@ class MainWindow(QMainWindow):
                 b_color = d.get("border_color", "#000000")
                 ctrls["btn_border_color"].setProperty("hex_color", b_color)
                 ctrls["btn_border_color"].setStyleSheet(f"background-color: {b_color}; color: {'#000000' if QColor(b_color).lightness() > 128 else '#FFFFFF'};")
+
+                # Restore title display time range
+                ctrls["spin_start"].blockSignals(True)
+                ctrls["spin_end"].blockSignals(True)
+                ctrls["spin_start"].setValue(d.get("start_time", 0.0))
+                ctrls["spin_end"].setValue(d.get("end_time", 15.0))
+                ctrls["spin_start"].blockSignals(False)
+                ctrls["spin_end"].blockSignals(False)
 
                 ctrls["chk_enable"].blockSignals(False)
                 ctrls["txt_text"].blockSignals(False)
