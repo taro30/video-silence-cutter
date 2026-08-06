@@ -4,5 +4,7 @@
     "./src/video_silence_cutter"
   ],
   "python.analysis.autoSearchPaths": true,
-  "python.defaultInterpreterPath": "./.venv/bin/python"
+  "python.defaultInterpreterPath": "./.venv/bin/python",
+  "python.languageServer": "Pylance",
+  "pyrefly.enable": false
 }
