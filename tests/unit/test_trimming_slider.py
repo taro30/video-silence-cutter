@@ -39,3 +39,13 @@ def test_trimming_slider_set_audio_intervals():
     intervals = [(5.0, 12.0), (20.0, 35.0)]
     slider.set_audio_presence_intervals(intervals)
     assert slider.audio_intervals == intervals
+
+def test_trimming_slider_set_cut_intervals():
+    slider = TrimmingSlider()
+    assert slider.cut_intervals == []
+
+    slider.set_cut_intervals([(5.0, 10.0), (20.0, 25.0)])
+    assert slider.cut_intervals == [(5.0, 10.0), (20.0, 25.0)]
+
+    slider.set_cut_intervals([])
+    assert slider.cut_intervals == []

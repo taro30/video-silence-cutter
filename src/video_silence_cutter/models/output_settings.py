@@ -4,13 +4,13 @@ from dataclasses import dataclass
 class OutputSettings:
     output_dir: str = ""
     output_filename: str = ""
-    encoder: str = "h264_videotoolbox"  # h264_videotoolbox (Apple Silicon) or libx264
+    encoder: str = "libx264"  # libx264 (マルチコアで最速) or h264_videotoolbox (低CPU/省電力)
     width: int = 1280
     height: int = 720
     fps_str: str = "30000/1001"
-    video_bitrate: str = "8000k"
-    max_bitrate: str = "10000k"
-    bufsize: str = "16000k"
+    video_bitrate: str = "1500k"
+    max_bitrate: str = "2500k"
+    bufsize: str = "4000k"
     gop: int = 60
     bframes: int = 0   # videotoolbox は B フレーム非対応
     pix_fmt: str = "yuv420p"

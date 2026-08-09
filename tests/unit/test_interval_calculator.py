@@ -117,3 +117,64 @@ def test_trimming_only_no_silence():
     )
     assert len(keeps) == 1
     assert keeps[0] == KeepInterval(5.0, 15.0)
+
+def test_manual_cut_is_not_shrunk_by_padding():
+    # 手動削除 10.0〜15.0 は padding を適用せず指定どおり削除される
+    keeps = IntervalCalculator.calculate_keep_intervals(
+        video_duration=20.0,
+        silence_intervals=[],
+        padding=0.2,
+        manual_cuts=[(10.0, 15.0)]
+    )
+    assert keeps == [KeepInterval(0.0, 10.0), KeepInterval(15.0, 20.0)]
+
+def test_multiple_manual_cuts_accumulate():
+    # 削除を繰り返しても書き出しなしで積み上がり、まとめて適用される
+    keeps = IntervalCalculator.calculate_keep_intervals(
+        video_duration=30.0,
+        silence_intervals=[],
+        padding=0.2,
+        manual_cuts=[(5.0, 8.0), (20.0, 25.0)]
+    )
+    assert keeps == [
+        KeepInterval(0.0, 5.0),
+        KeepInterval(8.0, 20.0),
+        KeepInterval(25.0, 30.0),
+    ]
+
+def test_overlapping_manual_cuts_are_merged():
+    keeps = IntervalCalculator.calculate_keep_intervals(
+        video_duration=30.0,
+        silence_intervals=[],
+        padding=0.2,
+        manual_cuts=[(5.0, 12.0), (10.0, 15.0)]
+    )
+    assert keeps == [KeepInterval(0.0, 5.0), KeepInterval(15.0, 30.0)]
+
+def test_manual_cut_combined_with_silence_and_range():
+    # トリム範囲 (2.0〜28.0) + 無音カット (10.0〜15.0, padding 0.2) + 手動削除 (20.0〜22.0)
+    keeps = IntervalCalculator.calculate_keep_intervals(
+        video_duration=30.0,
+        silence_intervals=[SilenceInterval(10.0, 15.0)],
+        padding=0.2,
+        range_start=2.0,
+        range_end=28.0,
+        manual_cuts=[(20.0, 22.0)]
+    )
+    assert keeps == [
+        KeepInterval(2.0, 10.2),
+        KeepInterval(14.8, 20.0),
+        KeepInterval(22.0, 28.0),
+    ]
+
+def test_manual_cut_outside_range_is_clipped():
+    # トリム範囲外にはみ出した削除指定は範囲内にクリップされる
+    keeps = IntervalCalculator.calculate_keep_intervals(
+        video_duration=30.0,
+        silence_intervals=[],
+        padding=0.2,
+        range_start=5.0,
+        range_end=25.0,
+        manual_cuts=[(0.0, 10.0)]
+    )
+    assert keeps == [KeepInterval(10.0, 25.0)]

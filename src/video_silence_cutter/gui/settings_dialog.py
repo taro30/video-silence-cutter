@@ -62,8 +62,8 @@ class SettingsDialog(QDialog):
         form_def.addRow("前後余白:", self.spin_pad)
 
         self.combo_encoder = QComboBox()
-        self.combo_encoder.addItem("互換性優先 (libx264)", "libx264")
-        self.combo_encoder.addItem("高速処理 (h264_videotoolbox)", "h264_videotoolbox")
+        self.combo_encoder.addItem("高速処理 (libx264) [推奨・マルチコア]", "libx264")
+        self.combo_encoder.addItem("省電力 (h264_videotoolbox) [ハードウェア加速・低CPU]", "h264_videotoolbox")
         enc_curr = self.settings.get("encoder_mode", "libx264")
         idx_enc = self.combo_encoder.findData(enc_curr)
         if idx_enc >= 0:

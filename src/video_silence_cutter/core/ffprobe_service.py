@@ -100,6 +100,58 @@ class FFprobeService:
             has_audio=has_audio
         )
 
+    def find_next_keyframe(
+        self,
+        file_path: str,
+        time_sec: float,
+        search_window_sec: float = 30.0
+    ) -> Optional[float]:
+        """
+        time_sec 以降で最初のキーフレーム位置を返す（見つからなければ None）。
+
+        無再エンコード (-c copy) の切り出しはキーフレーム単位でしか始められず、
+        指定時刻より前のキーフレームから始まってしまうと、削除したい区間の末尾が
+        出力に残ってしまう。そこで「以降の最初のキーフレーム」に合わせることで
+        削除範囲が必ず消えるようにする。
+
+        -read_intervals で該当箇所だけを読むためロングファイルでも高速。
+        """
+        cmd = [
+            str(self.ffprobe_path),
+            "-v", "error",
+            "-select_streams", "v:0",
+            "-read_intervals", f"{max(0.0, time_sec):.3f}%+{search_window_sec:.0f}",
+            "-show_packets",
+            "-show_entries", "packet=pts_time,flags",
+            "-of", "csv=p=0",
+            str(file_path)
+        ]
+
+        try:
+            res = subprocess.run(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False
+            )
+        except Exception as e:
+            logger.warning(f"キーフレーム検索に失敗しました: {e}")
+            return None
+
+        if res.returncode != 0:
+            logger.warning(f"キーフレーム検索に失敗しました: {res.stderr.strip()[:200]}")
+            return None
+
+        for line in res.stdout.splitlines():
+            parts = line.strip().split(",")
+            if len(parts) < 2 or "K" not in parts[1]:
+                continue
+            try:
+                pts = float(parts[0])
+            except ValueError:
+                continue
+            if pts >= time_sec - 0.001:
+                return pts
+
+        return None
+
     def _parse_frame_rate(self, r_frame_rate: str) -> tuple[float, str]:
         try:
             if "/" in r_frame_rate:

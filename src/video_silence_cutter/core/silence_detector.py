@@ -17,6 +17,10 @@ class SilenceDetector:
         self._process: Optional[subprocess.Popen] = None
         self._is_cancelled: bool = False
 
+    def reset_cancel(self) -> None:
+        """新しい処理を開始する前にキャンセルフラグを解除する。"""
+        self._is_cancelled = False
+
     def detect(
         self,
         input_path: str,
@@ -24,14 +28,17 @@ class SilenceDetector:
         video_duration: float,
         progress_callback: Optional[Callable[[float, str], None]] = None
     ) -> List[SilenceInterval]:
-        self._is_cancelled = False
-
-        af_filter = f"silencedetect=noise={settings.threshold_db}dB:d={settings.min_duration}"
+        # モノラル16kHzにリサンプルしてから解析（音声のみデコード・高速化）
+        af_filter = (
+            f"aresample=16000,aformat=channel_layouts=mono,"
+            f"silencedetect=noise={settings.threshold_db}dB:d={settings.min_duration}"
+        )
         cmd = [
             str(self.ffmpeg_path),
             "-y",
             "-progress", "pipe:1",
             "-i", input_path,
+            "-vn",          # 映像デコードをスキップ
             "-af", af_filter,
             "-f", "null",
             "-"

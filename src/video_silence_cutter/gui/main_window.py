@@ -3,7 +3,7 @@ import sys
 import logging
 import subprocess
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List, Tuple
 
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter, QTabWidget,
@@ -16,6 +16,7 @@ from PySide6.QtCore import Qt, QTimer, QSize, Signal
 from PySide6.QtMultimedia import QMediaPlayer
 
 from ..core.ffmpeg_locator import FFmpegLocator
+from ..core.interval_calculator import IntervalCalculator
 from ..models.video_info import VideoInfo
 from ..models.silence_settings import SilenceSettings
 from ..models.title_settings import TitleSettingsGroup, SingleTitleSettings
@@ -72,6 +73,11 @@ class MainWindow(QMainWindow):
         self.process_worker: Optional[VideoProcessWorker] = None
         self.last_result: Optional[ProcessResult] = None
         self.current_preview_sec: float = 0.0
+
+        # 手動で「削除」指定した区間 [(start_sec, end_sec), ...]。
+        # 書き出しは行わずアプリ内に保持し、最後の書き出し時にまとめて適用する。
+        self.manual_cuts: List[Tuple[float, float]] = []
+        self._last_run_cut_only: bool = False
 
         self._setup_menu_bar()
         self._init_ui()
@@ -234,9 +240,13 @@ class MainWindow(QMainWindow):
         act_analyze.triggered.connect(self._on_analyze_clicked)
         menu_process.addAction(act_analyze)
 
-        act_run = QAction("処理を実行", self)
-        act_run.setShortcut(QKeySequence("Ctrl+Return"))
-        act_run.triggered.connect(self._on_run_clicked)
+        act_trim = QAction("カットのみで書き出し (無再エンコード)", self)
+        act_trim.setShortcut(QKeySequence("Ctrl+Return"))
+        act_trim.triggered.connect(lambda: self._on_run_clicked(cut_only=True))
+        menu_process.addAction(act_trim)
+
+        act_run = QAction("タイトル合成して書き出し (再エンコード)", self)
+        act_run.triggered.connect(lambda: self._on_run_clicked(cut_only=False))
         menu_process.addAction(act_run)
 
         act_cancel = QAction("処理をキャンセル", self)
@@ -405,30 +415,66 @@ class MainWindow(QMainWindow):
 
         h_btns_line.addSpacing(15)
 
-        btn_set_start = QPushButton("✂️ 開始点に設定")
+        btn_set_start = QPushButton("🟢 削除開始点")
         btn_set_start.setStyleSheet("font-weight: bold; background-color: #007ACC; color: white; padding: 5px 10px;")
+        btn_set_start.setToolTip("現在の再生位置を「削除する範囲」の開始点にします")
         btn_set_start.clicked.connect(self._set_range_start_to_current)
         h_btns_line.addWidget(btn_set_start)
 
-        btn_set_end = QPushButton("✂️ 終了点に設定")
+        btn_set_end = QPushButton("🔴 削除終了点")
         btn_set_end.setStyleSheet("font-weight: bold; background-color: #d32f2f; color: white; padding: 5px 10px;")
+        btn_set_end.setToolTip("現在の再生位置を「削除する範囲」の終了点にします")
         btn_set_end.clicked.connect(self._set_range_end_to_current)
         h_btns_line.addWidget(btn_set_end)
 
-        btn_reset_trim = QPushButton("🔄 トリム解除")
+        btn_reset_trim = QPushButton("🔄 選択解除")
+        btn_reset_trim.setToolTip("🟢🔴 の選択範囲を解除します（削除リストは消えません）")
         btn_reset_trim.clicked.connect(self._reset_trim_range)
         h_btns_line.addWidget(btn_reset_trim)
 
         h_btns_line.addSpacing(10)
 
-        # 🚀 専用トリミング実行ボタン
-        self.btn_execute_trim = QPushButton("🚀 設定範囲でトリミング実行")
+        # 🗑 選択範囲を削除リストに積む（ファイルは書き出さない）
+        self.btn_delete_range = QPushButton("🗑 選択範囲を削除")
+        self.btn_delete_range.setStyleSheet(
+            "QPushButton { font-weight: bold; background-color: #c62828; color: white; padding: 5px 12px; border-radius: 4px; } "
+            "QPushButton:hover { background-color: #e53935; }"
+        )
+        self.btn_delete_range.setToolTip(
+            "🟢開始点〜🔴終了点をカット対象として削除リストに追加します。\n"
+            "ファイルの書き出しは行われず、そのまま次の範囲を指定して作業を続けられます。\n"
+            "削除した区間はタイムラインに赤く表示され、プレビュー再生でもスキップされます。"
+        )
+        self.btn_delete_range.clicked.connect(self._add_manual_cut)
+        h_btns_line.addWidget(self.btn_delete_range)
+
+        self.btn_undo_cut = QPushButton("↩️ 取消")
+        self.btn_undo_cut.setToolTip("直前に追加した削除区間を取り消します")
+        self.btn_undo_cut.setFixedWidth(70)
+        self.btn_undo_cut.clicked.connect(self._undo_manual_cut)
+        h_btns_line.addWidget(self.btn_undo_cut)
+
+        self.btn_clear_cuts = QPushButton("🧹 全解除")
+        self.btn_clear_cuts.setToolTip("削除リストを空にして元の動画全体に戻します")
+        self.btn_clear_cuts.setFixedWidth(85)
+        self.btn_clear_cuts.clicked.connect(self._clear_manual_cuts)
+        h_btns_line.addWidget(self.btn_clear_cuts)
+
+        h_btns_line.addSpacing(10)
+
+        # 🚀 削除結果をまとめて書き出すボタン（無再エンコード）
+        self.btn_execute_trim = QPushButton("🚀 カット結果を書き出し")
         self.btn_execute_trim.setStyleSheet(
             "QPushButton { font-weight: bold; background-color: #8e24aa; color: white; padding: 5px 12px; border-radius: 4px; } "
             "QPushButton:hover { background-color: #ab47bc; }"
         )
-        self.btn_execute_trim.setToolTip("設定した開始点〜終了点の範囲でカット処理を実行して書き出します")
-        self.btn_execute_trim.clicked.connect(self._on_run_clicked)
+        self.btn_execute_trim.setToolTip(
+            "削除リスト・無音カット・トリム範囲をまとめて適用し、\n"
+            "無再エンコード (Stream Copy) で1本のファイルに書き出します。\n"
+            "エンコードもリサイズもしないため、元の画質・解像度のまま数秒で完了します。\n"
+            "※ タイトル文字は合成されません（合成する場合は下の『タイトル合成して書き出し』を使用）"
+        )
+        self.btn_execute_trim.clicked.connect(lambda: self._on_run_clicked(cut_only=True))
         h_btns_line.addWidget(self.btn_execute_trim)
 
         h_btns_line.addStretch()
@@ -448,6 +494,11 @@ class MainWindow(QMainWindow):
         self.lbl_trim_status.setStyleSheet("font-weight: bold; color: #888888; font-size: 12px; margin-top: 4px;")
         player_layout.addWidget(self.lbl_trim_status)
 
+        # ── Line 4: Manual Delete List Indicator ──
+        self.lbl_cut_status = QLabel("🗑 削除リスト: なし")
+        self.lbl_cut_status.setStyleSheet("font-weight: bold; color: #888888; font-size: 12px;")
+        player_layout.addWidget(self.lbl_cut_status)
+
         right_layout.addWidget(player_box)
 
         self.splitter.addWidget(right_widget)
@@ -466,9 +517,15 @@ class MainWindow(QMainWindow):
         self.btn_analyze = QPushButton("無音区間を解析")
         self.btn_analyze.clicked.connect(self._on_analyze_clicked)
 
-        self.btn_run = QPushButton("無音カット＆タイトル合成を実行")
+        self.btn_run = QPushButton("🎬 タイトル合成して書き出し (再エンコード)")
         self.btn_run.setStyleSheet("font-weight: bold; background-color: #007ACC; color: white; padding: 6px 12px;")
-        self.btn_run.clicked.connect(self._on_run_clicked)
+        self.btn_run.setToolTip(
+            "タイトル文字を焼き込んで 1280x720 で再エンコード出力します。\n"
+            "カット済みファイル（カット指定なし）を入力にした場合は Stage 1 を省略し、\n"
+            "タイトル合成のエンコードだけを実行します。\n"
+            "カット指定が残っている場合は、そのカットも同時に適用されます。"
+        )
+        self.btn_run.clicked.connect(lambda: self._on_run_clicked(cut_only=False))
 
         self.btn_cancel = QPushButton("キャンセル")
         self.btn_cancel.setEnabled(False)
@@ -506,6 +563,7 @@ class MainWindow(QMainWindow):
         self.txt_log.setStyleSheet("background-color: #1e1e1e; color: #d4d4d4; font-family: monospace; font-size: 11px;")
         main_layout.addWidget(self.txt_log)
 
+        self._update_cut_status_label()
         self._log_message("アプリが起動しました。")
 
     def _init_title_tab(self):
@@ -726,15 +784,25 @@ class MainWindow(QMainWindow):
 
         self.txt_output_filename = QLineEdit()
 
+        # Apple Silicon では VideoToolbox の H.264 エンコーダは約 450fps で頭打ちになり、
+        # 全コアを使う libx264 -preset veryfast (約 900fps) の方が実測で速い（画質は同等）。
         self.combo_encoder = QComboBox()
-        self.combo_encoder.addItem("高速処理 (h264_videotoolbox) [推奨・ハードウェア加速]", "h264_videotoolbox")
-        self.combo_encoder.addItem("互換性優先 (libx264) [CPU低速]", "libx264")
+        self.combo_encoder.addItem("高速処理 (libx264) [推奨・マルチコア]", "libx264")
+        self.combo_encoder.addItem("省電力 (h264_videotoolbox) [ハードウェア加速・低CPU]", "h264_videotoolbox")
+        self.combo_encoder.currentIndexChanged.connect(self._on_encoder_changed)
 
         form.addRow("出力フォルダ:", h_dir)
         form.addRow("出力ファイル名:", self.txt_output_filename)
         form.addRow("エンコード方式:", self.combo_encoder)
 
-        lbl_fast_note = QLabel("※ タイトル文字を無効（または未入力）にした場合、自動的に『無再エンコード Stream Copy モード』が適用され、数秒〜数十秒で超高速に無音カット完了します。")
+        lbl_fast_note = QLabel(
+            "【おすすめの2パス運用】\n"
+            "⓪ 🟢🔴 は「削除する範囲」の指定です。書き出されるのは選んだ範囲**以外**（残り）です\n"
+            "① 『🗑 選択範囲を削除』でカット箇所を貯める（ファイルは書き出されません）\n"
+            "② 『🚀 カット結果を書き出し』で無再エンコード出力（元画質・元解像度のまま数秒）\n"
+            "③ 書き出し後の確認ダイアログで「はい」を選ぶとカット済みファイルが入力に切り替わります\n"
+            "④ タイトルを配置して『🎬 タイトル合成して書き出し』（このときだけ再エンコード/1280x720）"
+        )
         lbl_fast_note.setStyleSheet("color: #4caf50; font-size: 11px; margin-top: 5px;")
         form.addRow("", lbl_fast_note)
 
@@ -764,7 +832,7 @@ class MainWindow(QMainWindow):
         if 0.0 < et_sec <= st_sec:
             self.txt_range_end.setText("00:00:00")
 
-        self._log_message(f"✂️ 切り出し開始時間を設定: {hms_str}")
+        self._log_message(f"🟢 削除範囲の開始点を設定: {hms_str}")
         self._update_trim_status_label()
         self._on_title_setting_changed()
 
@@ -774,20 +842,96 @@ class MainWindow(QMainWindow):
         st_sec = hms_to_seconds(self.txt_range_start.text().strip()) if validate_hms(self.txt_range_start.text().strip()) else 0.0
         
         if et_sec <= st_sec and st_sec > 0:
-            QMessageBox.warning(self, "トリミング設定注意", "終了点は開始点よりも後ろの時間（位置）に設定してください。")
+            QMessageBox.warning(self, "削除範囲の指定エラー", "終了点は開始点よりも後ろの時間（位置）に設定してください。")
             return
 
         self.txt_range_end.setText(hms_str)
-        self._log_message(f"✂️ 切り出し終了時間を設定: {hms_str}")
+        self._log_message(f"🔴 削除範囲の終了点を設定: {hms_str}")
         self._update_trim_status_label()
         self._on_title_setting_changed()
 
     def _reset_trim_range(self):
         self.txt_range_start.setText("00:00:00")
         self.txt_range_end.setText("00:00:00")
-        self._log_message("🔄 切り出しトリム範囲をリセットしました")
+        self._log_message("🔄 削除範囲の選択を解除しました（削除リストは維持されます）")
         self._update_trim_status_label()
         self._on_title_setting_changed()
+
+    # ── 手動削除リスト（書き出しなしでカットを積み上げる） ──
+
+    def _add_manual_cut(self):
+        """現在の 🟢開始点〜🔴終了点 を削除リストに追加する（ファイル書き出しなし）。"""
+        if not self.current_video_info:
+            QMessageBox.warning(self, "警告", "先に動画ファイルを読み込んでください。")
+            return
+
+        selection = self._current_selection()
+        if selection is None:
+            QMessageBox.warning(
+                self, "削除範囲が未指定です",
+                "🟢 削除開始点 / 🔴 削除終了点 で削除したい範囲を指定してから押してください。"
+            )
+            return
+
+        st_sec, et_sec = selection
+        self.manual_cuts.append((st_sec, et_sec))
+        self.manual_cuts = IntervalCalculator.merge_cut_intervals(self.manual_cuts)
+
+        self._log_message(
+            f"🗑 削除リストに追加: {seconds_to_hms(st_sec)} 〜 {seconds_to_hms(et_sec)} "
+            f"({et_sec - st_sec:.1f}秒) ※ファイルは書き出していません"
+        )
+
+        # 選択範囲は消費したのでリセットし、続けて次の範囲を指定できるようにする
+        self.txt_range_start.setText("00:00:00")
+        self.txt_range_end.setText("00:00:00")
+        self._update_trim_status_label()
+        self._update_cut_status_label()
+
+    def _undo_manual_cut(self):
+        if not self.manual_cuts:
+            return
+        removed = self.manual_cuts.pop()
+        self._log_message(
+            f"↩️ 削除を取り消しました: {seconds_to_hms(removed[0])} 〜 {seconds_to_hms(removed[1])}"
+        )
+        self._update_cut_status_label()
+
+    def _clear_manual_cuts(self):
+        if not self.manual_cuts:
+            return
+        self.manual_cuts = []
+        self._log_message("🧹 削除リストを全解除しました（動画全体が対象に戻ります）")
+        self._update_cut_status_label()
+
+    def _update_cut_status_label(self):
+        total_dur = self.current_video_info.duration_seconds if self.current_video_info else 0.0
+
+        if hasattr(self, 'slider_video_timeline') and isinstance(self.slider_video_timeline, TrimmingSlider):
+            self.slider_video_timeline.set_cut_intervals(self.manual_cuts)
+
+        self.btn_undo_cut.setEnabled(bool(self.manual_cuts))
+        self.btn_clear_cuts.setEnabled(bool(self.manual_cuts))
+
+        if not self.manual_cuts:
+            self.lbl_cut_status.setText("🗑 削除リスト: なし")
+            self.lbl_cut_status.setStyleSheet("font-weight: bold; color: #888888; font-size: 12px;")
+            return
+
+        cut_total = sum(e - s for s, e in self.manual_cuts)
+        remain = max(0.0, total_dur - cut_total)
+        self.lbl_cut_status.setText(
+            f"🗑 削除リスト: {len(self.manual_cuts)}件 / 合計 {seconds_to_hms(cut_total)} 削除 "
+            f"→ 残り {seconds_to_hms(remain)}（書き出すまでファイルは作られません）"
+        )
+        self.lbl_cut_status.setStyleSheet("font-weight: bold; color: #e53935; font-size: 12px;")
+
+    def _cut_end_after(self, sec: float) -> Optional[float]:
+        """sec が削除区間の中にあれば、その区間の終端を返す（再生スキップ用）。"""
+        for c_start, c_end in self.manual_cuts:
+            if c_start - 0.05 <= sec < c_end - 0.05:
+                return c_end
+        return None
 
     def _update_trim_status_label(self):
         st_str = self.txt_range_start.text().strip()
@@ -802,14 +946,17 @@ class MainWindow(QMainWindow):
             self.slider_video_timeline.set_trim_range(st_sec, et_sec, total_dur)
 
         if st_sec == 0.0 and et_sec == 0.0:
-            self.lbl_trim_status.setText("✂️ トリム指定: 未設定 (動画全体を出力)")
+            self.lbl_trim_status.setText("🔲 削除範囲の選択: なし（🟢🔴 で削除したい範囲を挟んでください）")
             self.lbl_trim_status.setStyleSheet("font-weight: bold; color: #888888; font-size: 12px; margin-top: 4px;")
         else:
             end_label = seconds_to_hms(et_sec) if et_sec > 0 else "末尾"
             calc_end = et_sec if et_sec > 0 else (total_dur if total_dur > 0 else st_sec)
             dur_sec = max(0.0, calc_end - st_sec)
-            dur_str = f" (切り出し長さ: {seconds_to_hms(dur_sec)})" if dur_sec > 0 else ""
-            self.lbl_trim_status.setText(f"✂️ トリム指定中: 🟢 {seconds_to_hms(st_sec)} ～ 🔴 {end_label}{dur_str}")
+            dur_str = f" / 削除される長さ: {seconds_to_hms(dur_sec)}" if dur_sec > 0 else ""
+            self.lbl_trim_status.setText(
+                f"🔲 削除範囲を選択中: 🟢 {seconds_to_hms(st_sec)} ～ 🔴 {end_label}{dur_str}"
+                "（『🗑 選択範囲を削除』で確定 / この範囲以外が残ります）"
+            )
             self.lbl_trim_status.setStyleSheet("font-weight: bold; color: #007ACC; font-size: 12px; margin-top: 4px;")
 
     def _pick_color(self, button: QPushButton):
@@ -821,21 +968,6 @@ class MainWindow(QMainWindow):
             text_color = "#000000" if color.lightness() > 128 else "#FFFFFF"
             button.setStyleSheet(f"background-color: {hex_val}; color: {text_color};")
             self._update_preview()
-
-    def _load_ui_from_settings(self):
-        self.spin_thresh.setValue(self.app_settings.get("silence_threshold_db", -30.0))
-        self.spin_min_dur.setValue(self.app_settings.get("silence_min_duration", 3.0))
-        self.spin_padding.setValue(self.app_settings.get("silence_padding", 0.2))
-
-        # Title settings from app_settings
-        for idx in range(1, 4):
-            t_key = f"title{idx}"
-            if t_key in self.app_settings:
-                d = self.app_settings[t_key]
-                ctrls = self.title_controls[idx - 1]
-                ctrls["chk_enable"].setChecked(d.get("enabled", True))
-                ctrls["txt_text"].setText(d.get("text", f"タイトル{idx}"))
-                ctrls["spin_size"].setValue(d.get("font_size", 40))
 
     def _check_ffmpeg_on_startup(self):
         if not self.process_service or not self.locator.find_ffmpeg():
@@ -912,6 +1044,17 @@ class MainWindow(QMainWindow):
     def _on_video_player_position_changed(self, pos_ms: int):
         if self.current_video_info and self.current_video_info.duration_seconds > 0:
             sec = pos_ms / 1000.0
+
+            # 削除済み区間は再生時にスキップして、カット後の仕上がりを確認できるようにする
+            if self.preview_widget.player.playbackState() == QMediaPlayer.PlayingState:
+                skip_to = self._cut_end_after(sec)
+                if skip_to is not None:
+                    if skip_to >= self.current_video_info.duration_seconds - 0.1:
+                        self._stop_preview_play()
+                    else:
+                        self.preview_widget.player.setPosition(int(skip_to * 1000))
+                    return
+
             self.current_preview_sec = sec
             self.lbl_seek_curr_time.setText(seconds_to_hms(sec))
             val = int((sec / self.current_video_info.duration_seconds) * 1000.0)
@@ -936,6 +1079,11 @@ class MainWindow(QMainWindow):
         self.btn_stop_preview.setEnabled(True)
         self.slider_video_timeline.setEnabled(True)
         self.preview_widget.set_video_source(file_path)
+
+        # 別の動画に切り替えたら前の動画の削除リストは無効なので破棄する
+        self.manual_cuts = []
+        self._update_cut_status_label()
+
         self.app_settings["last_open_dir"] = str(Path(file_path).parent)
         self.settings_service.save_settings(self.app_settings)
 
@@ -995,6 +1143,14 @@ class MainWindow(QMainWindow):
         self.spin_thresh.setValue(self.app_settings.get("silence_threshold_db", -30.0))
         self.spin_min_dur.setValue(self.app_settings.get("silence_min_duration", 3.0))
         self.spin_padding.setValue(self.app_settings.get("silence_padding", 0.2))
+
+        # エンコード方式（設定ダイアログで保存した既定値を反映）
+        enc_mode = self.app_settings.get("encoder_mode", "libx264")
+        idx_enc = self.combo_encoder.findData(enc_mode)
+        if idx_enc >= 0:
+            self.combo_encoder.blockSignals(True)
+            self.combo_encoder.setCurrentIndex(idx_enc)
+            self.combo_encoder.blockSignals(False)
 
         # Title settings from app_settings
         for idx in range(1, 4):
@@ -1105,21 +1261,36 @@ class MainWindow(QMainWindow):
         return TitleSettingsGroup(title1=titles[0], title2=titles[1], title3=titles[2])
 
     def _collect_silence_settings(self) -> SilenceSettings:
-        start_sec = 0.0
-        end_sec = 0.0
-        if validate_hms(self.txt_range_start.text()):
-            start_sec = hms_to_seconds(self.txt_range_start.text())
-        if validate_hms(self.txt_range_end.text()):
-            end_sec = hms_to_seconds(self.txt_range_end.text())
-
+        # 🟢開始点/🔴終了点 は「削除する範囲を選ぶだけ」のマーカーであり、
+        # 「その範囲だけを残す」という意味では使わない。
+        # （両方の意味を持たせると、選んだ範囲だけが残る＝削除したい所だけが
+        #   出力される、という正反対の結果になるため range_start/end は渡さない）
         return SilenceSettings(
             enabled=self.chk_silence_enable.isChecked(),
             threshold_db=self.spin_thresh.value(),
             min_duration=self.spin_min_dur.value(),
             padding=self.spin_padding.value(),
-            range_start=start_sec,
-            range_end=end_sec
+            range_start=0.0,
+            range_end=0.0,
+            manual_cuts=list(self.manual_cuts)
         )
+
+    def _current_selection(self) -> Optional[Tuple[float, float]]:
+        """🟢開始点〜🔴終了点の選択範囲。未選択なら None。"""
+        if not self.current_video_info:
+            return None
+
+        st_str = self.txt_range_start.text().strip()
+        et_str = self.txt_range_end.text().strip()
+        st_sec = hms_to_seconds(st_str) if validate_hms(st_str) else 0.0
+        et_sec = hms_to_seconds(et_str) if validate_hms(et_str) else 0.0
+
+        if et_sec <= 0.0:
+            et_sec = self.current_video_info.duration_seconds
+
+        if et_sec - st_sec <= 0.01 or (st_sec <= 0.0 and et_sec >= self.current_video_info.duration_seconds):
+            return None
+        return st_sec, et_sec
 
     def _on_analyze_clicked(self):
         input_path = self.txt_input_path.text().strip()
@@ -1149,7 +1320,11 @@ class MainWindow(QMainWindow):
         dlg = IntervalTableDialog(self, v_info.duration_seconds, silences, keeps)
         dlg.exec()
 
-    def _on_run_clicked(self):
+    def _on_run_clicked(self, cut_only: bool = False):
+        """
+        cut_only=True: 無再エンコードのカットのみ（元画質・元解像度のまま高速書き出し）
+        cut_only=False: タイトル合成つきの通常エンコード書き出し
+        """
         input_path = self.txt_input_path.text().strip()
         out_dir = self.txt_output_dir.text().strip()
         out_filename = self.txt_output_filename.text().strip()
@@ -1167,6 +1342,26 @@ class MainWindow(QMainWindow):
         if input_path == output_path:
             QMessageBox.warning(self, "警告", "入力ファイルと出力ファイルに同じパスを指定できません。")
             return
+
+        # 🗑 を押し忘れて選択範囲が残っている場合の取りこぼし防止。
+        # 選択範囲は「残す範囲」ではなく「削除する範囲」なので、削除するか確認する。
+        selection = self._current_selection()
+        if selection is not None:
+            sel_start, sel_end = selection
+            reply = QMessageBox.question(
+                self,
+                "選択範囲が残っています",
+                f"選択中の範囲 {seconds_to_hms(sel_start)} 〜 {seconds_to_hms(sel_end)} "
+                f"({sel_end - sel_start:.1f}秒) は、まだ削除リストに入っていません。\n\n"
+                "この範囲も削除して書き出しますか？\n"
+                "（「いいえ」を選ぶと、この選択範囲は無視して書き出します）",
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
+                QMessageBox.Yes
+            )
+            if reply == QMessageBox.Cancel:
+                return
+            if reply == QMessageBox.Yes:
+                self._add_manual_cut()
 
         if Path(output_path).exists():
             reply = QMessageBox.question(
@@ -1187,8 +1382,12 @@ class MainWindow(QMainWindow):
             encoder=self.combo_encoder.currentData()
         )
 
+        self._last_run_cut_only = cut_only
         self._set_processing_ui_state(True)
-        self._log_message(f"処理を開始します: {out_filename}")
+        if cut_only:
+            self._log_message(f"✂️ カットのみ（無再エンコード）で処理を開始します: {out_filename}")
+        else:
+            self._log_message(f"🎬 タイトル合成つきエンコードで処理を開始します: {out_filename}")
 
         self.process_worker = VideoProcessWorker(
             self.process_service,
@@ -1196,7 +1395,8 @@ class MainWindow(QMainWindow):
             output_path,
             sil_settings,
             title_settings,
-            out_settings
+            out_settings,
+            cut_only=cut_only
         )
         self.process_worker.progress_signal.connect(self._update_progress_full)
         self.process_worker.finished_signal.connect(self._on_process_finished)
@@ -1218,6 +1418,63 @@ class MainWindow(QMainWindow):
         dlg = CompletionDialog(result, self)
         dlg.exec()
 
+        # カットだけ書き出した直後は、その結果にタイトルを入れる作業へ引き継げるようにする
+        if self._last_run_cut_only:
+            self._offer_continue_with_titles(result.output_file)
+
+    def _offer_continue_with_titles(self, cut_file_path: str):
+        """
+        カット済みファイルを入力に切り替えて、続けてタイトル入れ作業へ移るか尋ねる。
+        カット設定はすべてリセットするので、次の書き出しはタイトル合成のみ実行される。
+        """
+        if not cut_file_path or not Path(cut_file_path).is_file():
+            return
+
+        cut_path = Path(cut_file_path)
+        next_name = f"{cut_path.stem}_title{cut_path.suffix}"
+
+        reply = QMessageBox.question(
+            self,
+            "続けてタイトルを入れますか？",
+            f"カット後のファイルを書き出しました:\n{cut_path.name}\n\n"
+            "このカット後のファイルを入力に切り替えて、続けてタイトル入れ作業に移りますか？\n"
+            "（無音カット・削除リスト・トリム範囲はリセットされ、次の書き出しでは\n"
+            "タイトル合成だけが行われます）\n\n"
+            f"※ カット後のファイル {cut_path.name} は消さずにそのまま残します。\n"
+            f"　 タイトル入りは {next_name} として別ファイルに書き出します。",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        # カット指定を全てリセットしてから読み込む（二重カットを防ぐ）
+        self.chk_silence_enable.setChecked(False)
+        self.manual_cuts = []
+        self.txt_range_start.setText("00:00:00")
+        self.txt_range_end.setText("00:00:00")
+
+        self._load_video_from_path(cut_file_path)
+        self._update_trim_status_label()
+        self._update_cut_status_label()
+
+        # カット後のファイルを上書きしないよう _title 付きの別名を出力先にする
+        self.txt_output_dir.setText(str(cut_path.parent))
+        self.txt_output_filename.setText(next_name)
+
+        # タイトル設定タブへ切り替え
+        for i in range(self.tabs_controls.count()):
+            if self.tabs_controls.tabText(i) == "タイトル設定":
+                self.tabs_controls.setCurrentIndex(i)
+                break
+
+        self._log_message(
+            f"🅃 入力をカット後のファイルに切り替えました: {cut_path.name}（このファイルは残します）"
+        )
+        self._log_message(
+            f"　 タイトルを配置して『🎬 タイトル合成して書き出し』→ {next_name} に書き出されます。"
+        )
+
     def _on_process_error(self, err_msg: str):
         self._set_processing_ui_state(False)
         self._log_message(f"❌ エラー発生: {err_msg}")
@@ -1225,6 +1482,7 @@ class MainWindow(QMainWindow):
 
     def _set_processing_ui_state(self, is_processing: bool):
         self.btn_run.setEnabled(not is_processing)
+        self.btn_execute_trim.setEnabled(not is_processing)
         self.btn_analyze.setEnabled(not is_processing)
         self.btn_cancel.setEnabled(is_processing)
 
@@ -1233,7 +1491,9 @@ class MainWindow(QMainWindow):
         self.lbl_status.setText(msg)
 
     def _update_progress_full(self, pct: float, msg: str, elapsed: float, eta: float):
-        self.progress_bar.setValue(int(pct))
+        new_val = max(0, min(100, int(pct)))
+        if new_val >= self.progress_bar.value():
+            self.progress_bar.setValue(new_val)
         eta_str = seconds_to_hms(eta) if eta > 0 else "--:--:--"
         self.lbl_status.setText(f"{msg} (経過: {seconds_to_hms(elapsed)} / 残り: {eta_str})")
 
@@ -1247,11 +1507,18 @@ class MainWindow(QMainWindow):
         if self.last_result and self.last_result.output_file:
             subprocess.run(["open", "-R", self.last_result.output_file], check=False)
 
+    def _on_encoder_changed(self):
+        """メイン画面で選んだエンコード方式を設定ファイルへ永続化する。"""
+        self.app_settings["encoder_mode"] = self.combo_encoder.currentData()
+        self.settings_service.save_settings(self.app_settings)
+
     def _open_settings_dialog(self):
         dlg = SettingsDialog(self.app_settings, self)
         if dlg.exec():
             self.app_settings = dlg.get_updated_settings()
             self.settings_service.save_settings(self.app_settings)
+            # 変更した既定値（エンコード方式・無音検出パラメータ）を画面に即反映する
+            self._load_ui_from_settings()
             self._log_message("設定を更新しました。")
 
     def _open_logs_folder(self):

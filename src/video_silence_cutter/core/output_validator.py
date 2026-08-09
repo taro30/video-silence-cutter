@@ -11,7 +11,21 @@ class OutputValidator:
         self.ffprobe_service = ffprobe_service
         self.max_audio_sync_diff = max_audio_sync_diff
 
-    def validate(self, output_path: str, expected_duration: float = 0.0) -> Tuple[bool, str, VideoInfo]:
+    def validate(
+        self,
+        output_path: str,
+        expected_duration: float = 0.0,
+        expected_width: int = 1280,
+        expected_height: int = 720,
+        check_video_codec: bool = True,
+    ) -> Tuple[bool, str, VideoInfo]:
+        """
+        出力動画を検証する。
+
+        無再エンコード（カットのみ）モードでは解像度・コーデックが入力のまま
+        引き継がれるため、expected_width/height に 0 を、check_video_codec に
+        False を渡してそれらのチェックを無効化する。
+        """
         p = Path(output_path)
         if not p.is_file():
             return False, f"出力ファイルが存在しません: {output_path}", None
@@ -25,11 +39,15 @@ class OutputValidator:
             return False, f"出力動画メタデータの解析に失敗しました: {e}", None
 
         # Check resolution
-        if info.width != 1280 or info.height != 720:
-            return False, f"解像度が指定サイズ(1280x720)ではありません: {info.width}x{info.height}", info
+        if expected_width > 0 and expected_height > 0:
+            if info.width != expected_width or info.height != expected_height:
+                return False, (
+                    f"解像度が指定サイズ({expected_width}x{expected_height})ではありません: "
+                    f"{info.width}x{info.height}"
+                ), info
 
         # Check video codec
-        if info.video_codec.lower() not in ["h264", "avc1"]:
+        if check_video_codec and info.video_codec.lower() not in ["h264", "avc1"]:
             return False, f"映像コーデックがH.264ではありません: {info.video_codec}", info
 
         # Check audio sync if audio is present

@@ -125,3 +125,64 @@ class FilterBuilder:
         script_path.write_text(script_content, encoding="utf-8")
 
         return script_path, current_v, a_concat_out, title_image_paths
+
+    @staticmethod
+    def build_overlay_only_filter_script(
+        has_audio: bool,
+        title_settings: Optional[TitleSettingsGroup],
+        temp_dir: Path,
+        output_width: int = 1280,
+        output_height: int = 720,
+    ) -> Tuple[Path, str, str, List[Path]]:
+        """
+        Stage 2 用: スケール + オーバーレイのみのシンプルなフィルタースクリプト。
+        trim/concat なしで既にカット済みの中間ファイルを処理する。
+        """
+        lines: List[str] = []
+        title_image_paths: List[Path] = []
+
+        lines.append(
+            f"[0:v]scale={output_width}:{output_height}:force_original_aspect_ratio=decrease,"
+            f"pad={output_width}:{output_height}:(ow-iw)/2:(oh-ih)/2:black,"
+            f"setsar=1,format=yuv420p[vscaled];"
+        )
+        current_v = "vscaled"
+
+        if title_settings:
+            titles = [title_settings.title1, title_settings.title2, title_settings.title3]
+            active_titles = [t for t in titles if t.enabled and t.text.strip()]
+
+            if active_titles:
+                composite_img_path = temp_dir / "title_composite.png"
+                rendered = TitleRenderer.render_composite_title_image(
+                    title_settings_list=active_titles,
+                    output_path=composite_img_path,
+                    video_width=output_width,
+                    video_height=output_height,
+                )
+                if rendered:
+                    title_image_paths.append(composite_img_path)
+                    first = active_titles[0]
+                    enable_expr = ""
+                    if first.start_time >= 0 and first.end_time > first.start_time:
+                        enable_expr = f":enable='between(t,{first.start_time},{first.end_time})'"
+                    next_v = "vtitle_composite"
+                    lines.append(
+                        f"[{current_v}][1:v]overlay=0:0{enable_expr}[{next_v}];"
+                    )
+                    current_v = next_v
+
+        a_out = ""
+        if has_audio:
+            lines.append("[0:a]acopy[aout];")
+            a_out = "aout"
+
+        if lines and lines[-1].endswith(";"):
+            lines[-1] = lines[-1][:-1]
+
+        script_content = "\n".join(lines)
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        script_path = temp_dir / "overlay_filter_script.txt"
+        script_path.write_text(script_content, encoding="utf-8")
+
+        return script_path, current_v, a_out, title_image_paths

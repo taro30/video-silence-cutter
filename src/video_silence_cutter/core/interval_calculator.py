@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional, Tuple
 from ..models.silence_interval import SilenceInterval
 from ..models.keep_interval import KeepInterval
 
@@ -10,7 +10,12 @@ class IntervalCalculator:
         padding: float = 0.2,
         range_start: float = 0.0,
         range_end: float = 0.0,
+        manual_cuts: Optional[List[Tuple[float, float]]] = None,
     ) -> List[KeepInterval]:
+        """
+        manual_cuts は手動で「この範囲を削除」と指定した区間。
+        無音区間と違い padding による短縮は行わず、指定どおりそのまま削除する。
+        """
         if video_duration <= 0:
             return []
 
@@ -50,8 +55,15 @@ class IntervalCalculator:
             if cut_s < cut_e:
                 cut_intervals.append((cut_s, cut_e))
 
+        # Manual delete intervals (padding は適用しない)
+        for m_start, m_end in (manual_cuts or []):
+            s = max(r_start, min(m_start, m_end))
+            e = min(r_end, max(m_start, m_end))
+            if s < e:
+                cut_intervals.append((s, e))
+
         # 2. Merge overlapping or adjacent cut intervals
-        merged_cuts = IntervalCalculator._merge_cut_intervals(cut_intervals)
+        merged_cuts = IntervalCalculator.merge_cut_intervals(cut_intervals)
 
         # 3. Invert cut intervals to find KeepIntervals
         keep_intervals: List[KeepInterval] = []
@@ -70,7 +82,7 @@ class IntervalCalculator:
         return valid_keeps
 
     @staticmethod
-    def _merge_cut_intervals(intervals: List[tuple[float, float]]) -> List[tuple[float, float]]:
+    def merge_cut_intervals(intervals: List[tuple[float, float]]) -> List[tuple[float, float]]:
         if not intervals:
             return []
 

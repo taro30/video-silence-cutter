@@ -1,20 +1,40 @@
 import os
+import select
 import time
 import subprocess
 import threading
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Set
 from ..models.output_settings import OutputSettings
 from ..utils.process_utils import kill_process_group
 
 logger = logging.getLogger(__name__)
+
+# セグメント切り出しの並列度。Stream Copy はデコードを伴わず I/O 律速のため、
+# コア数を超えて増やしても頭打ちになる。
+MAX_SEGMENT_WORKERS = 10
+
 
 class VideoProcessor:
     def __init__(self, ffmpeg_path: Path):
         self.ffmpeg_path = ffmpeg_path
         self._process: Optional[subprocess.Popen] = None
         self._is_cancelled: bool = False
+        self._segment_procs: Set[subprocess.Popen] = set()
+        self._segment_lock = threading.Lock()
+
+    def reset_cancel(self) -> None:
+        """
+        新しい処理を開始する前にキャンセルフラグを解除する。
+
+        VideoProcessor は GUI 実行中ずっと使い回されるため、これを呼ばないと
+        一度キャンセルしたあと全ての処理が即座に失敗し続ける。
+        パイプライン全体の開始時に一度だけ呼ぶこと（各ステージで呼ぶと、
+        ステージの切れ目に要求されたキャンセルを取りこぼす）。
+        """
+        self._is_cancelled = False
 
     def process_concat_demuxer(
         self,
@@ -27,7 +47,6 @@ class VideoProcessor:
         FFmpeg の concat demuxer を使って無再エンコード (-c copy) で高速結合する。
         処理時間は数秒で完了し、画質劣化も一切発生しない。
         """
-        self._is_cancelled = False
         start_time = time.time()
 
         out_file = Path(output_path)
@@ -88,25 +107,39 @@ class VideoProcessor:
                             pass
                     raise RuntimeError("高速カット結合処理がキャンセルされました。")
 
-                line = self._process.stdout.readline()
-                if not line and self._process.poll() is not None:
+                try:
+                    ready, _, _ = select.select([self._process.stdout], [], [], 0.5)
+                except (ValueError, OSError):
                     break
 
-                if line:
-                    line_str = line.strip()
-                    if line_str.startswith("speed="):
-                        curr_speed = line_str.split("=")[1].strip()
-                    elif line_str.startswith("out_time_us=") and progress_callback and expected_duration > 0:
-                        try:
-                            us = float(line_str.split("=")[1])
-                            curr_sec = us / 1000000.0
-                            pct = min(99.0, (curr_sec / expected_duration) * 100.0)
-                            elapsed = time.time() - start_time
-                            eta = (elapsed / (pct / 100.0)) - elapsed if pct > 0 else 0.0
-                            speed_info = f" ({curr_speed})" if curr_speed else ""
-                            progress_callback(pct, f"高速カット結合中 ({pct:.1f}%{speed_info})", elapsed, max(0.0, eta))
-                        except Exception:
-                            pass
+                if not ready:
+                    if self._process.poll() is not None:
+                        break
+                    if progress_callback:
+                        elapsed = time.time() - start_time
+                        progress_callback(99.5, "ファイルを書き込み中...", elapsed, 0.0)
+                    continue
+
+                line = self._process.stdout.readline()
+                if not line:
+                    break
+
+                line_str = line.strip()
+                if line_str.startswith("speed="):
+                    curr_speed = line_str.split("=")[1].strip()
+                elif line_str.startswith("out_time_us=") and progress_callback and expected_duration > 0:
+                    try:
+                        us = float(line_str.split("=")[1])
+                        if us < 0:
+                            continue
+                        curr_sec = us / 1000000.0
+                        pct = min(99.0, (curr_sec / expected_duration) * 100.0)
+                        elapsed = time.time() - start_time
+                        eta = (elapsed / (pct / 100.0)) - elapsed if pct > 0 else 0.0
+                        speed_info = f" ({curr_speed})" if curr_speed else ""
+                        progress_callback(pct, f"高速カット結合中 ({pct:.1f}%{speed_info})", elapsed, max(0.0, eta))
+                    except Exception:
+                        pass
 
             self._process.wait()
             t_err.join(timeout=3.0)
@@ -145,7 +178,6 @@ class VideoProcessor:
         単一のトリミング区間を無再エンコード Stream Copy (-c copy) で超高速切り出しする。
         処理時間はわずか 0.5秒〜2秒で完了する。
         """
-        self._is_cancelled = False
         start_time = time.time()
         out_file = Path(output_path)
         temp_out_file = out_file.with_name(out_file.name + ".processing.mp4")
@@ -232,7 +264,6 @@ class VideoProcessor:
         progress_callback: Optional[Callable[[float, str, float, float], None]] = None,
         title_image_paths: Optional[List[Path]] = None
     ) -> bool:
-        self._is_cancelled = False
         start_time = time.time()
 
         out_file = Path(output_path)
@@ -254,8 +285,11 @@ class VideoProcessor:
             "-loglevel", "warning",
             "-progress", "pipe:1",
             "-threads", "0",
-            "-i", input_path,
         ]
+        # Apple Silicon ハードウェアデコードを有効化
+        if settings.encoder == "h264_videotoolbox":
+            cmd.extend(["-hwaccel", "videotoolbox"])
+        cmd.extend(["-i", input_path])
 
         # タイトル画像をオーバーレイ入力として追加（タイトルがある場合）
         if title_image_paths:
@@ -348,25 +382,39 @@ class VideoProcessor:
                             pass
                     raise RuntimeError("動画編集・エンコード処理がキャンセルされました。")
 
-                line = self._process.stdout.readline()
-                if not line and self._process.poll() is not None:
+                try:
+                    ready, _, _ = select.select([self._process.stdout], [], [], 0.5)
+                except (ValueError, OSError):
                     break
 
-                if line:
-                    line_str = line.strip()
-                    if line_str.startswith("speed="):
-                        curr_speed = line_str.split("=")[1].strip()
-                    elif line_str.startswith("out_time_us=") and progress_callback and expected_duration > 0:
-                        try:
-                            us = float(line_str.split("=")[1])
-                            curr_sec = us / 1000000.0
-                            pct = min(99.0, (curr_sec / expected_duration) * 100.0)
-                            elapsed = time.time() - start_time
-                            eta = (elapsed / (pct / 100.0)) - elapsed if pct > 0 else 0.0
-                            speed_info = f" ({curr_speed})" if curr_speed else ""
-                            progress_callback(pct, f"動画を編集・エンコード中 ({pct:.1f}%{speed_info})", elapsed, max(0.0, eta))
-                        except Exception:
-                            pass
+                if not ready:
+                    if self._process.poll() is not None:
+                        break
+                    if progress_callback:
+                        elapsed = time.time() - start_time
+                        progress_callback(99.5, "ファイルを書き込み中...", elapsed, 0.0)
+                    continue
+
+                line = self._process.stdout.readline()
+                if not line:
+                    break
+
+                line_str = line.strip()
+                if line_str.startswith("speed="):
+                    curr_speed = line_str.split("=")[1].strip()
+                elif line_str.startswith("out_time_us=") and progress_callback and expected_duration > 0:
+                    try:
+                        us = float(line_str.split("=")[1])
+                        if us < 0:
+                            continue
+                        curr_sec = us / 1000000.0
+                        pct = min(99.0, (curr_sec / expected_duration) * 100.0)
+                        elapsed = time.time() - start_time
+                        eta = (elapsed / (pct / 100.0)) - elapsed if pct > 0 else 0.0
+                        speed_info = f" ({curr_speed})" if curr_speed else ""
+                        progress_callback(pct, f"動画を編集・エンコード中 ({pct:.1f}%{speed_info})", elapsed, max(0.0, eta))
+                    except Exception:
+                        pass
 
             self._process.wait()
             t_err.join(timeout=3.0)
@@ -418,7 +466,118 @@ class VideoProcessor:
         finally:
             self._process = None
 
+    def process_segments_to_files(
+        self,
+        input_path: str,
+        keep_intervals: list,
+        temp_dir: Path,
+        progress_callback: Optional[Callable[[float, str, float, float], None]] = None
+    ) -> List[Path]:
+        """
+        各 keep_interval を stream copy で個別の一時ファイルに切り出す。
+
+        各切り出しは独立しているため ThreadPoolExecutor で並列実行する。
+        Stream Copy は 1 本あたり数十ミリ秒で終わるので、直列だとプロセス起動の
+        オーバーヘッドが支配的になる（100 セグメントで直列 4.7 秒 → 並列 0.8 秒）。
+        """
+        total = len(keep_intervals)
+        start_time = time.time()
+        segment_files: List[Path] = [temp_dir / f"segment_{i:04d}.mp4" for i in range(total)]
+
+        if total == 0:
+            return segment_files
+
+        max_workers = min(MAX_SEGMENT_WORKERS, os.cpu_count() or 4, total)
+        done_count = 0
+        counter_lock = threading.Lock()
+
+        def _cut_segment(index: int) -> None:
+            nonlocal done_count
+
+            if self._is_cancelled:
+                raise RuntimeError("処理がキャンセルされました。")
+
+            interval = keep_intervals[index]
+            seg_file = segment_files[index]
+
+            cmd = [
+                str(self.ffmpeg_path),
+                "-y",
+                "-loglevel", "warning",
+                "-ss", f"{max(0.0, interval.start):.3f}",
+            ]
+            if interval.end > interval.start:
+                cmd.extend(["-to", f"{interval.end:.3f}"])
+            cmd.extend([
+                "-i", input_path,
+                "-c", "copy",
+                "-avoid_negative_ts", "make_zero",
+                str(seg_file)
+            ])
+
+            logger.debug(f"Stream Copy Segment {index+1}/{total}: {' '.join(cmd)}")
+
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                start_new_session=True
+            )
+            with self._segment_lock:
+                self._segment_procs.add(proc)
+            try:
+                _, stderr_out = proc.communicate()
+            finally:
+                with self._segment_lock:
+                    self._segment_procs.discard(proc)
+
+            if proc.returncode != 0:
+                if self._is_cancelled:
+                    raise RuntimeError("処理がキャンセルされました。")
+                raise RuntimeError(f"セグメント {index} の切り出しに失敗:\n{(stderr_out or '')[-300:]}")
+
+            with counter_lock:
+                done_count += 1
+                finished = done_count
+
+            if progress_callback:
+                pct = (finished / total) * 100.0
+                progress_callback(
+                    pct,
+                    f"セグメント切り出し中 ({finished}/{total})",
+                    time.time() - start_time,
+                    0.0
+                )
+
+        logger.info(f"Stream Copy Segments: {total} 本を並列度 {max_workers} で切り出します。")
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [executor.submit(_cut_segment, i) for i in range(total)]
+            first_error: Optional[BaseException] = None
+            for future in futures:
+                if future.cancelled():
+                    continue
+                exc = future.exception()
+                if exc is not None and first_error is None:
+                    # 最初の失敗で残りを打ち切り、実行中のプロセスも停止させる
+                    first_error = exc
+                    for pending in futures:
+                        pending.cancel()
+                    self._kill_segment_procs()
+            if first_error is not None:
+                raise first_error
+
+        return segment_files
+
+    def _kill_segment_procs(self) -> None:
+        with self._segment_lock:
+            procs = list(self._segment_procs)
+        for proc in procs:
+            kill_process_group(proc)
+
     def cancel(self) -> None:
         self._is_cancelled = True
         if self._process:
             kill_process_group(self._process)
+        self._kill_segment_procs()

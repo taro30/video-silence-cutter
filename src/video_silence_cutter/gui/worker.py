@@ -44,7 +44,8 @@ class VideoProcessWorker(QThread):
         output_path: str,
         silence_settings: SilenceSettings,
         title_settings: TitleSettingsGroup,
-        output_settings: OutputSettings
+        output_settings: OutputSettings,
+        cut_only: bool = False
     ):
         super().__init__()
         self.process_service = process_service
@@ -53,6 +54,7 @@ class VideoProcessWorker(QThread):
         self.silence_settings = silence_settings
         self.title_settings = title_settings
         self.output_settings = output_settings
+        self.cut_only = cut_only
 
     def run(self):
         try:
@@ -62,7 +64,8 @@ class VideoProcessWorker(QThread):
                 silence_settings=self.silence_settings,
                 title_settings=self.title_settings,
                 output_settings=self.output_settings,
-                progress_cb=lambda pct, msg, el, eta: self.progress_signal.emit(pct, msg, el, eta)
+                progress_cb=lambda pct, msg, el, eta: self.progress_signal.emit(pct, msg, el, eta),
+                cut_only=self.cut_only
             )
             self.finished_signal.emit(result)
         except Exception as e:

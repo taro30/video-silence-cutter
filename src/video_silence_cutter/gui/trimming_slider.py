@@ -21,6 +21,7 @@ class TrimmingSlider(QSlider):
         self.zoom_factor = 1.0  # 1.0x 〜 10.0x
         self.view_start_pct = 0.0
         self.audio_intervals: List[Tuple[float, float]] = []  # 有音（音声あり）区間リスト
+        self.cut_intervals: List[Tuple[float, float]] = []    # 手動で削除指定した区間リスト
 
     def set_trim_range(self, start_sec: float, end_sec: float, duration_sec: float):
         self.start_sec = start_sec
@@ -30,6 +31,11 @@ class TrimmingSlider(QSlider):
 
     def set_audio_presence_intervals(self, audio_intervals: List[Tuple[float, float]]):
         self.audio_intervals = audio_intervals
+        self.update()
+
+    def set_cut_intervals(self, cut_intervals: List[Tuple[float, float]]):
+        """手動削除した区間を赤帯で表示する。"""
+        self.cut_intervals = list(cut_intervals)
         self.update()
 
     def set_zoom_factor(self, factor: float):
@@ -78,6 +84,22 @@ class TrimmingSlider(QSlider):
                 aw = max(2, ax2 - ax1)
                 # スライダー溝のすぐ下(cy+6)に音声バーを描画
                 painter.drawRoundedRect(ax1, cy + 6, aw, 4, 2, 2)
+
+        # ── 0.5. 手動削除した区間の描画（溝の上に赤いバツ印帯） ──
+        if self.cut_intervals:
+            painter.setPen(Qt.NoPen)
+            for c_start, c_end in self.cut_intervals:
+                st_pct = max(0.0, min(1.0, c_start / self.duration_sec))
+                et_pct = max(0.0, min(1.0, c_end / self.duration_sec))
+                cx1 = margin + int(st_pct * groove_w)
+                cx2 = margin + int(et_pct * groove_w)
+                cw = max(2, cx2 - cx1)
+                painter.setBrush(QBrush(QColor(229, 57, 53, 200)))  # 赤 = 削除済み
+                painter.drawRoundedRect(cx1, cy - 9, cw, 18, 3, 3)
+                # 削除済みであることが一目で分かるよう斜線を入れる
+                painter.setPen(QPen(QColor(255, 255, 255, 160), 1))
+                painter.drawLine(cx1, cy + 9, cx1 + cw, cy - 9)
+                painter.setPen(Qt.NoPen)
 
         has_start = self.start_sec > 0.0
         has_end = 0.0 < self.end_sec < self.duration_sec

@@ -10,6 +10,7 @@ from ..core.interval_calculator import IntervalCalculator
 from ..core.filter_builder import FilterBuilder
 from ..core.video_processor import VideoProcessor
 from ..core.output_validator import OutputValidator
+from ..models.keep_interval import KeepInterval
 from ..models.silence_settings import SilenceSettings
 from ..models.title_settings import TitleSettingsGroup
 from ..models.output_settings import OutputSettings
@@ -38,6 +39,7 @@ class ProcessService:
         silence_settings: SilenceSettings,
         progress_cb: Optional[Callable[[float, str], None]] = None
     ):
+        self._reset_cancel()
         v_info = self.ffprobe_service.inspect_video(input_path)
         silences = []
         if silence_settings.enabled and v_info.has_audio:
@@ -50,7 +52,8 @@ class ProcessService:
             silence_intervals=silences,
             padding=silence_settings.padding,
             range_start=silence_settings.range_start,
-            range_end=silence_settings.range_end
+            range_end=silence_settings.range_end,
+            manual_cuts=silence_settings.manual_cuts
         )
         return v_info, silences, keeps
 
@@ -61,8 +64,15 @@ class ProcessService:
         silence_settings: SilenceSettings,
         title_settings: TitleSettingsGroup,
         output_settings: OutputSettings,
-        progress_cb: Optional[Callable[[float, str, float, float], None]] = None
+        progress_cb: Optional[Callable[[float, str, float, float], None]] = None,
+        cut_only: bool = False
     ) -> ProcessResult:
+        """
+        cut_only=True の場合は「カットのみ」モード。
+        タイトル合成もスケーリングも行わず、必ず無再エンコード (-c copy) で
+        切り出し・結合するだけなので、元の画質・解像度・コーデックがそのまま残る。
+        """
+        self._reset_cancel()
         start_time = time.time()
         v_info = self.ffprobe_service.inspect_video(input_path)
 
@@ -93,10 +103,20 @@ class ProcessService:
             silence_intervals=silences,
             padding=silence_settings.padding,
             range_start=silence_settings.range_start,
-            range_end=silence_settings.range_end
+            range_end=silence_settings.range_end,
+            manual_cuts=silence_settings.manual_cuts
         )
 
+        # Stream Copy はキーフレームからしか切り出せないため、そのままだと削除区間の
+        # 末尾（直前のキーフレーム〜削除終了点）が出力に残ってしまう。
+        # 各保持区間の開始をキーフレーム位置まで前進させ、削除範囲を完全に消す。
+        keeps = self._snap_keeps_to_keyframes(input_path, keeps)
+
         expected_output_duration = sum(k.duration for k in keeps)
+
+        # カットのみモードではタイトル合成を一切行わない
+        if cut_only:
+            title_settings = None
 
         # 有効なタイトル合成があるか判定
         has_active_title = False
@@ -122,7 +142,15 @@ class ProcessService:
             if progress_cb:
                 progress_cb(95.0, "出力動画を検証中...", time.time() - start_time, 0.0)
 
-            valid, val_msg, out_info = self.output_validator.validate(output_path, expected_output_duration)
+            # Stream Copy 出力は入力の解像度・コーデックをそのまま引き継ぐため
+            # 1280x720 / H.264 前提のチェックは行わない
+            valid, val_msg, out_info = self.output_validator.validate(
+                output_path,
+                expected_output_duration,
+                expected_width=0,
+                expected_height=0,
+                check_video_codec=False
+            )
             if not valid:
                 logger.warning(f"出力検証の警告: {val_msg}")
 
@@ -150,46 +178,129 @@ class ProcessService:
                 error_message=""
             )
 
+        # カット指定が一切ない（動画全体をそのまま残す）かどうか。
+        # 「先にカットだけ書き出し → その動画にタイトルだけ入れる」2パス運用では
+        # ここが True になり、Stage 1 のセグメント切り出し・結合を丸ごと省略できる。
+        no_cut_needed = (
+            len(keeps) == 1
+            and keeps[0].start <= 0.01
+            and keeps[0].end >= v_info.duration_seconds - 0.05
+        )
+
         temp_dir_obj = create_temp_dir()
         temp_dir = Path(temp_dir_obj.name)
 
         try:
-            def enc_cb(pct: float, msg: str, el: float, eta: float):
+            # ── Stage 2: 再エンコードが必要か判定 ──
+            # タイトルなし & 解像度同じ → stream copy のまま出力（再エンコード不要）
+            needs_encode = has_active_title or (
+                not cut_only and (
+                    v_info.width != output_settings.width or
+                    v_info.height != output_settings.height
+                )
+            )
+
+            if no_cut_needed and needs_encode:
+                # ── Stage 1 スキップ: 入力から直接タイトル合成・エンコード ──
+                logger.info("カット指定なし → Stage 1 (Stream Copy) を省略して直接エンコードします。")
+                temp_concat_path = Path(input_path)
+                actual_concat_duration = v_info.duration_seconds
+            else:
+                # ── Stage 1: Stream Copy でセグメント切り出し → Concat (超高速) ──
+                logger.info("2ステージパイプライン: Stage 1 (Stream Copy) を開始します。")
                 if progress_cb:
-                    scaled_pct = 30.0 + (pct * 0.60)  # 30% to 90%
-                    progress_cb(scaled_pct, msg, el, eta)
+                    progress_cb(25.0, "セグメントを高速切り出し中...", time.time() - start_time, 0.0)
 
-            # ── ⚡ 確実・爆速・黒画面フリー パイプライン ──
-            # h264_videotoolbox ハードウェア加速 + Pillow1枚合成PNG
-            # マイナスタイムスタンプを完全に防ぎ、0.00s から滑らかに再生可能
-            logger.info("統合フィルター + ハードウェアエンコード パイプラインを実行します。")
-            script_path, v_label, a_label, title_image_paths = FilterBuilder.build_filter_script(
-                keep_intervals=keeps,
-                has_audio=v_info.has_audio,
-                title_settings=title_settings,
-                temp_dir=temp_dir,
-                output_width=output_settings.width,
-                output_height=output_settings.height,
-                fps_fraction=output_settings.fps_str
-            )
+                def seg_cb(pct: float, msg: str, el: float, eta: float):
+                    if progress_cb:
+                        progress_cb(25.0 + (pct * 0.15), msg, el, eta)
 
-            self.video_processor.process_video(
-                input_path=input_path,
-                output_path=output_path,
-                filter_script_path=script_path,
-                v_label=v_label,
-                a_label=a_label,
-                settings=output_settings,
-                expected_duration=expected_output_duration,
-                progress_callback=enc_cb,
-                title_image_paths=title_image_paths
-            )
+                segment_files = self.video_processor.process_segments_to_files(
+                    input_path=input_path,
+                    keep_intervals=keeps,
+                    temp_dir=temp_dir,
+                    progress_callback=seg_cb
+                )
 
-            # Step 5: Output validation
+                concat_list_path = temp_dir / "concat_list.txt"
+                concat_list_path.write_text(
+                    "\n".join(f"file '{seg.resolve()}'" for seg in segment_files),
+                    encoding="utf-8"
+                )
+
+                temp_concat_path = temp_dir / "stage1_concat.mp4"
+
+                def concat_cb(pct: float, msg: str, el: float, eta: float):
+                    if progress_cb:
+                        progress_cb(40.0 + (pct * 0.10), msg, el, eta)
+
+                self.video_processor.process_concat_demuxer(
+                    concat_list_path=concat_list_path,
+                    output_path=str(temp_concat_path),
+                    expected_duration=expected_output_duration,
+                    progress_callback=concat_cb
+                )
+
+                # Stream copy はキーフレーム単位でカットするため実際の長さが expected と異なる場合がある
+                # ffprobe で実尺を取得し Stage 2 のプログレス計算に使う
+                try:
+                    concat_info = self.ffprobe_service.inspect_video(str(temp_concat_path))
+                    actual_concat_duration = concat_info.duration_seconds
+                except Exception:
+                    actual_concat_duration = expected_output_duration
+
+            if needs_encode:
+                logger.info("2ステージパイプライン: Stage 2 (エンコード) を開始します。")
+                if progress_cb:
+                    progress_cb(50.0, "エンコード中...", time.time() - start_time, 0.0)
+
+                script_path, v_label, a_label, title_image_paths = FilterBuilder.build_overlay_only_filter_script(
+                    has_audio=v_info.has_audio,
+                    title_settings=title_settings,
+                    temp_dir=temp_dir,
+                    output_width=output_settings.width,
+                    output_height=output_settings.height,
+                )
+
+                def enc_cb(pct: float, msg: str, el: float, eta: float):
+                    if progress_cb:
+                        progress_cb(50.0 + (pct * 0.42), msg, el, eta)
+
+                self.video_processor.process_video(
+                    input_path=str(temp_concat_path),
+                    output_path=output_path,
+                    filter_script_path=script_path,
+                    v_label=v_label,
+                    a_label=a_label,
+                    settings=output_settings,
+                    expected_duration=actual_concat_duration,
+                    progress_callback=enc_cb,
+                    title_image_paths=title_image_paths
+                )
+            else:
+                reason = "カットのみモード" if cut_only else "解像度・タイトル変更なし"
+                logger.info(f"{reason} → Stream Copy のまま出力（再エンコードスキップ）")
+                if progress_cb:
+                    progress_cb(85.0, "出力ファイルをコピー中...", time.time() - start_time, 0.0)
+                import shutil
+                if temp_concat_path == Path(input_path):
+                    # Stage 1 を省略した場合 temp_concat_path は入力ファイル自身。
+                    # move すると入力動画が消えてしまうためコピーする。
+                    shutil.copy2(str(temp_concat_path), output_path)
+                else:
+                    shutil.move(str(temp_concat_path), output_path)
+
             if progress_cb:
                 progress_cb(92.0, "出力ファイルを検証中...", time.time() - start_time, 0.0)
 
-            valid, val_msg, out_info = self.output_validator.validate(output_path, expected_output_duration)
+            # 再エンコードしていない場合は入力の解像度・コーデックのままなので検証条件を緩める
+            valid, val_msg, out_info = self.output_validator.validate(
+                output_path,
+                expected_output_duration,
+                expected_width=output_settings.width if needs_encode else 0,
+                expected_height=output_settings.height if needs_encode else 0,
+                check_video_codec=needs_encode
+            )
             if not valid:
                 raise RuntimeError(f"出力検証失敗: {val_msg}")
 
@@ -221,6 +332,62 @@ class ProcessService:
 
         finally:
             temp_dir_obj.cleanup()
+
+    def _snap_keeps_to_keyframes(self, input_path: str, keeps: List[KeepInterval]) -> List[KeepInterval]:
+        """
+        各保持区間の開始位置を「その時刻以降の最初のキーフレーム」に合わせる。
+
+        -c copy はキーフレームからしか切り出せず、指定より前のキーフレームから
+        始まると削除したい区間の末尾が残ってしまう（「完全にカットされない」）。
+        開始を後ろにずらすことで、削除範囲が必ず消えるようにする。
+
+        ずらすと保持区間が消えてしまう場合（キーフレーム間隔より短い区間）は、
+        映像を失わないよう元の開始位置のままにする。
+        """
+        if len(keeps) <= 1:
+            return keeps
+
+        snapped: List[KeepInterval] = []
+        adjusted = 0
+
+        for k in keeps:
+            if k.start <= 0.01:
+                snapped.append(k)
+                continue
+
+            kf = self.ffprobe_service.find_next_keyframe(input_path, k.start)
+            if kf is None or kf <= k.start + 0.001:
+                snapped.append(k)
+                continue
+
+            if kf >= k.end - 0.05:
+                # ずらすと区間が消えてしまうので映像優先で元のまま残す
+                logger.warning(
+                    f"保持区間 {k.start:.2f}s〜{k.end:.2f}s はキーフレーム間隔より短いため "
+                    f"位置調整をスキップします（削除区間の一部が残る可能性があります）。"
+                )
+                snapped.append(k)
+                continue
+
+            logger.info(f"キーフレームに合わせて開始位置を調整: {k.start:.2f}s → {kf:.2f}s")
+            snapped.append(KeepInterval(start=kf, end=k.end))
+            adjusted += 1
+
+        if adjusted:
+            logger.info(f"{adjusted} 箇所の開始位置をキーフレームに合わせました（削除漏れ防止）。")
+
+        return snapped
+
+    def _reset_cancel(self):
+        """
+        処理開始時にキャンセル状態を解除する。
+
+        ProcessService（と配下の SilenceDetector / VideoProcessor）はアプリ起動中
+        使い回されるため、これがないと一度キャンセルした以降のすべての実行が
+        「処理がキャンセルされました。」で即座に失敗する。
+        """
+        self.silence_detector.reset_cancel()
+        self.video_processor.reset_cancel()
 
     def cancel(self):
         self.silence_detector.cancel()
