@@ -260,3 +260,33 @@ def test_manual_cut_removes_whole_selected_span(tmp_path):
     # 保持は [0,5] + [10,14] = 9.0s。削除区間の残骸(約1.2s)が混ざっていないこと
     assert result.output_duration < 9.5, "削除した区間が出力に残っています"
     assert result.output_duration > 8.5
+
+
+def test_analyze_reports_silence_even_when_cut_disabled(tmp_path):
+    """
+    「無音カットを有効にする」が OFF でも、明示的な無音区間の解析は結果を返すこと。
+
+    カット後の「続けてタイトルを入れる」フローではこのチェックが自動で外れるため、
+    解析まで抑止してしまうと、以降どのファイルを調べても必ず「無音 0 件」になっていた。
+    """
+    locator = FFmpegLocator()
+    ffmpeg_path = locator.find_ffmpeg()
+    if not ffmpeg_path or not locator.find_ffprobe():
+        pytest.skip("FFmpeg/ffprobe is not installed on system. Skipping integration test.")
+
+    src = tmp_path / "synthetic_14s.mp4"
+    if not create_synthetic_test_video(ffmpeg_path, src):
+        pytest.skip("Failed to generate synthetic test video with lavfi.")
+
+    service = ProcessService(locator)
+    base = dict(threshold_db=-30.0, min_duration=3.0, padding=0.2)
+
+    _, silences_off, _ = service.analyze_silence_only(
+        str(src), SilenceSettings(enabled=False, **base)
+    )
+    _, silences_on, _ = service.analyze_silence_only(
+        str(src), SilenceSettings(enabled=True, **base)
+    )
+
+    assert len(silences_off) == 1, "無音カット OFF でも 5〜9秒の無音が検出されること"
+    assert [(s.start, s.end) for s in silences_off] == [(s.start, s.end) for s in silences_on]

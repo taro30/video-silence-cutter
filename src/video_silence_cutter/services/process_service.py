@@ -39,13 +39,19 @@ class ProcessService:
         silence_settings: SilenceSettings,
         progress_cb: Optional[Callable[[float, str], None]] = None
     ):
+        # 「無音区間を解析」はユーザーが明示的に実行する調査用の操作なので、
+        # silence_settings.enabled（＝書き出し時に無音カットを適用するか）では
+        # 抑止しない。ここで抑止すると、カット後にチェックが外れている状態では
+        # 何度解析しても必ず「無音 0 件」になってしまう。
         self._reset_cancel()
         v_info = self.ffprobe_service.inspect_video(input_path)
         silences = []
-        if silence_settings.enabled and v_info.has_audio:
+        if v_info.has_audio:
             silences = self.silence_detector.detect(
                 input_path, silence_settings, v_info.duration_seconds, progress_cb
             )
+        else:
+            logger.warning(f"音声ストリームが無いため無音解析をスキップしました: {input_path}")
 
         keeps = IntervalCalculator.calculate_keep_intervals(
             video_duration=v_info.duration_seconds,

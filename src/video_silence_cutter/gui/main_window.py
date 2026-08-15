@@ -78,6 +78,10 @@ class MainWindow(QMainWindow):
         # 書き出しは行わずアプリ内に保持し、最後の書き出し時にまとめて適用する。
         self.manual_cuts: List[Tuple[float, float]] = []
         self._last_run_cut_only: bool = False
+        # カット後の「続けてタイトルを入れる」フローで無音カットを自動的に
+        # 外したかどうか。次に別の動画を読み込んだ時だけ元に戻すために使う
+        # （ユーザーが自分で外した場合は勝手に戻さない）。
+        self._silence_auto_disabled: bool = False
 
         self._setup_menu_bar()
         self._init_ui()
@@ -1070,9 +1074,17 @@ class MainWindow(QMainWindow):
     def _on_volume_changed(self, val: int):
         self.preview_widget.audio_output.setVolume(val / 100.0)
 
-    def _load_video_from_path(self, file_path: str):
+    def _load_video_from_path(self, file_path: str, keep_cut_settings: bool = False):
         if not self.process_service:
             return
+
+        # 「カット後 → 続けてタイトル」フローで自動的に外した無音カットは、
+        # 別の動画を読み込んだ時点で元に戻す。戻さないと、以降ずっと無音カットが
+        # 効かないまま（＝解析も書き出しも無音を無視したまま）になってしまう。
+        if not keep_cut_settings and self._silence_auto_disabled:
+            self.chk_silence_enable.setChecked(True)
+            self._silence_auto_disabled = False
+            self._log_message("🔊 無音カットを有効に戻しました（新しい動画を読み込んだため）。")
 
         self.txt_input_path.setText(file_path)
         self.btn_play_preview.setEnabled(True)
@@ -1311,6 +1323,11 @@ class MainWindow(QMainWindow):
     def _on_analysis_finished(self, v_info, silences, keeps):
         self._set_processing_ui_state(False)
         self._log_message(f"無音解析完了: 検出無音数={len(silences)}件, 保持（音声）区間数={len(keeps)}件")
+        if not self.chk_silence_enable.isChecked():
+            self._log_message(
+                "⚠️ 「無音カットを有効にする」が OFF です。解析結果は表示していますが、"
+                "このままだと書き出し時に無音はカットされません。"
+            )
 
         # 🎵 スライダーバー直下に音声発生箇所（有音区間）のシアン帯を可視化セット
         if hasattr(self, 'slider_video_timeline') and isinstance(self.slider_video_timeline, TrimmingSlider):
@@ -1450,11 +1467,12 @@ class MainWindow(QMainWindow):
 
         # カット指定を全てリセットしてから読み込む（二重カットを防ぐ）
         self.chk_silence_enable.setChecked(False)
+        self._silence_auto_disabled = True
         self.manual_cuts = []
         self.txt_range_start.setText("00:00:00")
         self.txt_range_end.setText("00:00:00")
 
-        self._load_video_from_path(cut_file_path)
+        self._load_video_from_path(cut_file_path, keep_cut_settings=True)
         self._update_trim_status_label()
         self._update_cut_status_label()
 
